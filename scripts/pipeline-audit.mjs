@@ -133,6 +133,15 @@ function groupCount(items, keyFn) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }))
 }
 
+function registryKey(record) {
+  const rawId = record?.raw_id ?? record?.rawId
+  if (rawId) return `raw:${rawId}`
+  const sourcePath = record?.source_path ?? record?.sourcePath
+  const contentHash = record?.content_hash ?? record?.contentHash
+  if (sourcePath && contentHash) return `path:${sourcePath}|${contentHash}`
+  return null
+}
+
 function runPowerShellJson(command) {
   const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", command], {
     encoding: "utf8",
@@ -203,8 +212,15 @@ function buildAudit(projectPath) {
   }
 
   const queuePath = path.join(systemRoot, "codex-raw-watch-queue.jsonl")
+  const registryPath = path.join(systemRoot, "ingest-registry.jsonl")
   const queueItems = readJsonlMaybe(queuePath)
+  const registryItems = readJsonlMaybe(registryPath)
+  const registryKeys = new Set(registryItems.map(registryKey).filter(Boolean))
   const pendingQueue = queueItems.filter((item) => String(item.status ?? "") === "pending_codex_ingest")
+  const unresolvedPendingQueue = pendingQueue.filter((item) => {
+    const key = registryKey(item)
+    return !key || !registryKeys.has(key)
+  })
   const latestQueueSeen = queueItems.map((item) => item.first_seen_at).filter(Boolean).sort().at(-1) ?? null
   const queuedTodayFiles = queueItems.filter((item) => String(item.source_path ?? "").includes(today))
 
@@ -219,6 +235,7 @@ function buildAudit(projectPath) {
   const tasks = scheduledTasks()
   const wrongProjectPathTasks = tasks.filter((task) => String(task.Action ?? "").includes("73绁炶瘽"))
   const rawWatchTask = tasks.find((task) => task.TaskName === "Codex RAW Watch 73WIKI") ?? null
+  const rawConsumerTask = tasks.find((task) => task.TaskName === "Codex RAW Consume 73WIKI") ?? null
   const marketTasks = tasks.filter((task) => String(task.TaskName).startsWith("73WIKI-Market-"))
   const authorityTasks = tasks.filter((task) => String(task.TaskName).startsWith("73WIKI-Authority-"))
   const werssTasks = tasks.filter((task) => /werss|youzi/i.test(String(task.TaskName + task.Action)))
@@ -230,7 +247,8 @@ function buildAudit(projectPath) {
   const warnings = []
   if (wrongProjectPathTasks.length > 0) issues.push(`${wrongProjectPathTasks.length} scheduled task(s) still write to mojibake project path`)
   if (!rawWatchTask?.NextRunTime) issues.push("RAW watcher has no next run time")
-  if (pendingQueue.length > 0) issues.push(`${pendingQueue.length} RAW queue item(s) are still pending_codex_ingest`)
+  if (!rawConsumerTask?.NextRunTime) issues.push("RAW consumer has no next run time")
+  if (unresolvedPendingQueue.length > 0) issues.push(`${unresolvedPendingQueue.length} unresolved RAW queue item(s) are still pending_codex_ingest`)
   if (queuedTodayFiles.length === 0 && (latestRawTrade?.path?.includes(today) || latestRawReview?.path?.includes(today))) issues.push("today RAW files exist but are not in RAW watch queue")
   if (latestRawTrade && keyWikiFiles.every((item) => !item.exists || Date.parse(item.mtime) < latestRawTrade.mtimeMs)) issues.push("latest trade ticket is newer than core wiki pages")
   if (latestRawReview && keyWikiFiles.every((item) => !item.exists || Date.parse(item.mtime) < latestRawReview.mtimeMs)) issues.push("latest daily review is newer than core wiki pages")
@@ -261,8 +279,11 @@ function buildAudit(projectPath) {
     artifacts,
     rawQueue: {
       path: queuePath,
+      registryPath,
       total: queueItems.length,
-      pendingCodexIngest: pendingQueue.length,
+      registryRecords: registryItems.length,
+      pendingCodexIngestRaw: pendingQueue.length,
+      pendingCodexIngest: unresolvedPendingQueue.length,
       latestFirstSeenAt: latestQueueSeen,
       queuedTodayFiles: queuedTodayFiles.length,
       statusCounts: groupCount(queueItems, (item) => item.status),
@@ -278,6 +299,7 @@ function buildAudit(projectPath) {
       authorityTasks: authorityTasks.length,
       werssTasks: werssTasks.length,
       rawWatchTask,
+      rawConsumerTask,
       wrongProjectPathTasks: wrongProjectPathTasks.map((task) => ({
         taskName: task.TaskName,
         lastRunTime: task.LastRunTime,
@@ -323,7 +345,9 @@ function buildMarkdown(record) {
     "## 队列",
     "",
     `- RAW 队列总数: ${record.rawQueue.total}`,
-    `- pending_codex_ingest: ${record.rawQueue.pendingCodexIngest}`,
+    `- pending_codex_ingest(raw): ${record.rawQueue.pendingCodexIngestRaw}`,
+    `- pending_codex_ingest(unresolved): ${record.rawQueue.pendingCodexIngest}`,
+    `- ingest registry records: ${record.rawQueue.registryRecords}`,
     `- 最新 first_seen_at: ${record.rawQueue.latestFirstSeenAt ?? "-"}`,
     `- 今日 RAW 入队数: ${record.rawQueue.queuedTodayFiles}`,
     "",
