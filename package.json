@@ -34,6 +34,7 @@
     "learning:layers": "node scripts/learning-layers.mjs --write",
     "evidence:queue": "node scripts/evidence-queue.mjs --write",
     "review:manifest": "node scripts/review-manifest.mjs --write",
+    "review:apply": "node scripts/review-apply.mjs --write",
     "training:lora": "node scripts/training-lora.mjs --write",
     "training:trajectories": "node scripts/trading-trajectories.mjs --write",
     "training:flywheel": "node scripts/training-flywheel.mjs --write",

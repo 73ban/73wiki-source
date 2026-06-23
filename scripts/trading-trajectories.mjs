@@ -15,6 +15,8 @@ const ARTIFACTS = {
   executionAudit: ".llm-wiki/execution-audit/latest-execution-audit.json",
   postSellValidation: ".llm-wiki/post-sell-validation/latest-post-sell-validation.json",
 }
+const POSITION_PAGE_PATH = "wiki/06-持仓与资金管理/当前持仓决策.md"
+const ERROR_LIBRARY_ROOT = "wiki/05-错误库"
 
 function parseArgs(argv) {
   const args = { _: [] }
@@ -83,12 +85,45 @@ function readJsonl(filePath) {
   return fs.readFileSync(filePath, "utf8").split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line))
 }
 
+function readTextMaybe(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null
+    return fs.readFileSync(filePath, "utf8")
+  } catch {
+    return null
+  }
+}
+
 function toArray(value) {
   return Array.isArray(value) ? value : []
 }
 
 function unique(values) {
   return [...new Set(toArray(values).filter(Boolean).map((value) => String(value).trim()).filter(Boolean))]
+}
+
+function walkMarkdown(dirPath, limit = 300) {
+  if (!fs.existsSync(dirPath)) return []
+  const out = []
+  const stack = [dirPath]
+  while (stack.length > 0 && out.length < limit) {
+    const current = stack.pop()
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name)
+      if (entry.isDirectory()) stack.push(fullPath)
+      else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) out.push(fullPath)
+      if (out.length >= limit) break
+    }
+  }
+  return out
+}
+
+function extractCodeMentions(text) {
+  return unique(String(text ?? "").match(/\b(?:00|30|60|68|83|87|92)\d{4}\b/g) ?? [])
+}
+
+function compactText(text, maxLength = 360) {
+  return String(text ?? "").replace(/\s+/g, " ").trim().slice(0, maxLength)
 }
 
 function normalizeTradeDate(value) {
@@ -196,6 +231,8 @@ function buildHypothesisTrajectory(row, validation, context) {
       stockReasonCards: context.cardsByCode.get(String(code)) ?? [],
       correctionAlerts: context.correctionsByCode.get(String(code)) ?? [],
       postSellValidations: context.postSellByCode.get(String(code)) ?? [],
+      positionContext: context.positionByCode.get(String(code)) ?? [],
+      errorLibraryContext: context.errorRefsByCode.get(String(code)) ?? context.generalErrorRefs,
     },
     after: {
       validationResult: validation?.result ?? null,
@@ -237,7 +274,7 @@ function buildCorrectionTrajectory(item) {
   }
 }
 
-function buildExecutionTrajectory(audit) {
+function buildExecutionTrajectory(audit, context) {
   return {
     schema: "73wiki-trading-trajectory-v1",
     id: `traj_exec_${shortHash(audit?.id ?? audit?.generatedAt)}`,
@@ -257,6 +294,8 @@ function buildExecutionTrajectory(audit) {
       planCodes: audit?.planCodes ?? [],
       tradeCodes: audit?.tradeCodes ?? [],
       riskHits: audit?.riskHits ?? [],
+      positionContext: toArray(audit?.tradeCodes).flatMap((code) => context.positionByCode.get(String(code)) ?? []),
+      errorLibraryContext: toArray(audit?.tradeCodes).flatMap((code) => context.errorRefsByCode.get(String(code)) ?? []),
     },
     after: {
       severity: audit?.severity ?? null,
@@ -267,11 +306,51 @@ function buildExecutionTrajectory(audit) {
   }
 }
 
+function collectPositionContext(projectPath) {
+  const text = readTextMaybe(path.join(projectPath, POSITION_PAGE_PATH))
+  const byCode = new Map()
+  if (!text) return byCode
+  for (const code of extractCodeMentions(text)) {
+    byCode.set(code, [{
+      source: POSITION_PAGE_PATH,
+      excerpt: compactText(text.split(/\r?\n/).filter((line) => line.includes(code)).join(" ")),
+    }])
+  }
+  return byCode
+}
+
+function collectErrorLibraryContext(projectPath) {
+  const files = walkMarkdown(path.join(projectPath, ERROR_LIBRARY_ROOT), 500)
+  const byCode = new Map()
+  const general = []
+  for (const filePath of files) {
+    const text = readTextMaybe(filePath) ?? ""
+    const relativePath = path.relative(projectPath, filePath).replace(/\\/g, "/")
+    const title = path.basename(filePath, ".md")
+    const ref = {
+      source: relativePath,
+      title,
+      excerpt: compactText(text, 220),
+    }
+    const codes = extractCodeMentions(`${title}\n${text}`)
+    if (codes.length === 0) {
+      if (general.length < 20) general.push(ref)
+      continue
+    }
+    for (const code of codes) {
+      if (!byCode.has(code)) byCode.set(code, [])
+      if (byCode.get(code).length < 8) byCode.get(code).push(ref)
+    }
+  }
+  return { byCode, general }
+}
+
 function buildContext(projectPath) {
   const correctionAlerts = readJsonMaybe(path.join(projectPath, ARTIFACTS.correctionAlerts))
   const watchlist = readJsonMaybe(path.join(projectPath, ARTIFACTS.watchlist))
   const cards = readJsonMaybe(path.join(projectPath, ARTIFACTS.stockReasonCards))
   const postSell = readJsonMaybe(path.join(projectPath, ARTIFACTS.postSellValidation))
+  const errorContext = collectErrorLibraryContext(projectPath)
   return {
     correctionAlerts,
     executionAudit: readJsonMaybe(path.join(projectPath, ARTIFACTS.executionAudit)),
@@ -302,6 +381,9 @@ function buildContext(projectPath) {
       summary: item.summary,
       result: item.result,
     })),
+    positionByCode: collectPositionContext(projectPath),
+    errorRefsByCode: errorContext.byCode,
+    generalErrorRefs: errorContext.general,
   }
 }
 
@@ -354,7 +436,7 @@ function main() {
   const trajectories = [
     ...hypotheses.map((row) => buildHypothesisTrajectory(row, validationsByTarget.get(row.id), context)),
     ...toArray(context.correctionAlerts?.items).map(buildCorrectionTrajectory),
-    ...(context.executionAudit ? [buildExecutionTrajectory(context.executionAudit)] : []),
+    ...(context.executionAudit ? [buildExecutionTrajectory(context.executionAudit, context)] : []),
   ].sort((a, b) => String(a.tradeDate ?? "").localeCompare(String(b.tradeDate ?? "")) || a.id.localeCompare(b.id))
   const report = buildReport(projectPath, trajectories)
   if (args.write) {
