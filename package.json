@@ -45,6 +45,7 @@
     "warroom:skeleton": "node scripts/warroom-skeleton.mjs --write",
     "system:health": "node scripts/system-health.mjs --write",
     "pipeline:audit": "node scripts/pipeline-audit.mjs --write",
+    "tasks:training-flywheel": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/register-training-flywheel-task.ps1",
     "market:validate": "node scripts/market-validate.mjs",
     "postsell:validate": "node scripts/post-sell-validation.mjs",
     "limitup:reasons": "node scripts/limit-up-reasons.mjs",
