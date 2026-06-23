@@ -126,9 +126,9 @@ function loadPendingBatch(projectPath, batchSize) {
       relativePath: projectRelative(projectPath, String(record.source_path)),
     })
     seenKeys.add(key)
-    if (pending.length >= Number(batchSize)) break
   }
-  return { pending, skipped }
+  pending.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)
+  return { pending: pending.slice(0, Number(batchSize)), skipped }
 }
 
 function buildHotFilePayload(projectPath, items, ttlHours = 6) {

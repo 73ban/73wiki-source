@@ -577,12 +577,31 @@ function runPsql(sql, { captureStdout = true, quiet = false } = {}) {
 function main() {
   const projectPath = path.resolve(process.argv[2] ?? DEFAULT_PROJECT_PATH)
   const records = FACT_FILES.flatMap((relative) => readJsonl(path.join(projectPath, relative)))
-  const sql = [
-    "begin;",
-    ...records.map(importRecord),
-    "commit;",
-  ].join("\n")
-  runPsql(sql, { captureStdout: false, quiet: true })
+  let importedFactRecords = 0
+  let batch = []
+  let batchChars = 0
+  const maxBatchChars = 8 * 1024 * 1024
+  const maxBatchRecords = 500
+
+  function flushBatch() {
+    if (batch.length === 0) return
+    runPsql(["begin;", ...batch, "commit;"].join("\n"), { captureStdout: false, quiet: true })
+    batch = []
+    batchChars = 0
+  }
+
+  for (const record of records) {
+    const sql = importRecord(record)
+    if (!sql.trim()) continue
+    if (batch.length > 0 && (batchChars + sql.length > maxBatchChars || batch.length >= maxBatchRecords)) {
+      flushBatch()
+    }
+    batch.push(sql)
+    batchChars += sql.length
+    importedFactRecords += 1
+  }
+  flushBatch()
+
   const counts = runPsql(`
 select 'batches' as table_name, count(*) from trading.market_snapshot_batches
 union all select 'catalyst_events', count(*) from trading.catalyst_events
@@ -610,7 +629,7 @@ order by table_name;
   console.log(JSON.stringify({
     ok: true,
     projectPath,
-    importedFactRecords: records.length,
+    importedFactRecords,
     counts: counts.trim().split(/\r?\n/).slice(2, -1).map((line) => line.trim()).filter(Boolean),
   }, null, 2))
 }
