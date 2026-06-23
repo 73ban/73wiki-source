@@ -25,6 +25,7 @@ const CORE_ARTIFACTS = [
   { label: "correctionAlerts", relativePath: ".llm-wiki/correction-alerts/latest-correction-alerts.json" },
   { label: "evidenceQueue", relativePath: ".llm-wiki/evidence-queue/latest-evidence-queue.json" },
   { label: "reviewManifest", relativePath: ".llm-wiki/review-runs/latest-review-manifest.json" },
+  { label: "tradingTrajectories", relativePath: ".llm-wiki/trading-trajectories/latest-trading-trajectories-report.json" },
   { label: "trainingLora", relativePath: ".llm-wiki/training-lora/latest-training-lora-report.json" },
   { label: "conceptPools", relativePath: ".llm-wiki/concept-pools/latest-concept-pools.json" },
   { label: "preopen", relativePath: ".llm-wiki/preopen/latest-preopen-intel.json" },

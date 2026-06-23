@@ -35,6 +35,8 @@
     "evidence:queue": "node scripts/evidence-queue.mjs --write",
     "review:manifest": "node scripts/review-manifest.mjs --write",
     "training:lora": "node scripts/training-lora.mjs --write",
+    "training:trajectories": "node scripts/trading-trajectories.mjs --write",
+    "training:flywheel": "node scripts/training-flywheel.mjs --write",
     "concept:pools": "node scripts/concept-pools.mjs --write",
     "brain:push": "node scripts/brain-push.mjs",
     "execution:audit": "node scripts/execution-audit.mjs --write",

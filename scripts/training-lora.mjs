@@ -6,7 +6,9 @@ import path from "node:path"
 const DEFAULT_PROJECT_PATH = process.env.WIKI_PROJECT_PATH ?? "C:/wiki/73神话"
 const HYPOTHESES_PATH = "data/brain/hypotheses.jsonl"
 const VALIDATIONS_PATH = "data/brain/validations.jsonl"
+const TRAJECTORIES_PATH = "data/training/trading_trajectories.jsonl"
 const OUTPUT_PATH = "data/training/lora_samples.jsonl"
+const CANDIDATES_OUTPUT_PATH = "data/training/lora_candidates.jsonl"
 const REPORT_ROOT = ".llm-wiki/training-lora"
 
 function parseArgs(argv) {
@@ -188,8 +190,69 @@ function buildSample(hypothesis, validation) {
   }
 }
 
-function buildReport(projectPath, samples, diagnostics) {
+function buildTrajectorySample(trajectory) {
+  const instructionByType = {
+    hypothesis: "根据完整交易轨迹，复盘当时的预判是否有效，并输出可复用的交易判断规则。",
+    correction: "根据纠偏轨迹，判断该风险信号是否需要升级为用户提醒，并说明证据强度。",
+    "execution-audit": "根据执行审计轨迹，识别是否存在计划外交易或纪律风险，并输出改进规则。",
+  }
+  const codeText = trajectory.code ? `${trajectory.name ?? ""}(${trajectory.code})` : trajectory.name ?? "组合/系统"
+  return {
+    schema: "73wiki-lora-sample-v1",
+    id: `lora_traj_${shortHash(trajectory.id)}`,
+    sourceTrajectoryId: trajectory.id,
+    sourceHypothesisId: trajectory.sourceIds?.hypothesisId ?? null,
+    sourceValidationId: trajectory.sourceIds?.validationId ?? null,
+    instruction: instructionByType[trajectory.type] ?? "根据交易轨迹做复盘判断。",
+    input: {
+      type: trajectory.type,
+      tradeDate: trajectory.tradeDate,
+      target: codeText,
+      before: trajectory.before,
+      during: trajectory.during,
+      after: trajectory.after,
+    },
+    output: {
+      decision: trajectory.before?.tradeReason ?? "进入复核流程，不直接形成买卖建议。",
+      reasoning: trajectory.before?.hypothesis ?? null,
+      riskControl: trajectory.type === "correction"
+        ? "强证据风险优先提醒；弱证据只记录观察。"
+        : trajectory.type === "execution-audit"
+          ? "计划外交易默认高风险，复盘后沉淀纪律约束。"
+          : "候选必须经过竞价、分时、板块和后续 D1/D3/D5 验证。",
+      lesson: labelLesson(trajectory.label),
+    },
+    label: {
+      result: trajectory.label,
+      validationResult: trajectory.after?.validationResult ?? null,
+      bestGainPct: trajectory.after?.bestGainPct ?? null,
+      finalGainPct: trajectory.after?.finalGainPct ?? null,
+      checkpointOutcomes: trajectory.after?.checkpoints ?? [],
+    },
+    metadata: {
+      createdAt: nowLocalTimestamp(),
+      dataHorizonTradeDate: trajectory.after?.dataHorizonTradeDate ?? null,
+      tags: ["73wiki", "trading-trajectory", "lora-ready", trajectory.type, trajectory.label],
+    },
+  }
+}
+
+function labelLesson(label) {
+  if (label === "success") return "该预判链条通过阶段验证，可作为相似场景召回样本。"
+  if (label === "failure") return "该预判链条失败，应回看证据质量、买点和风险词。"
+  if (label === "data_gap") return "验证数据不足，不能作为强规则，只能补证或降权。"
+  if (label === "risk_high") return "强风险信号需要优先复核并准备提醒用户。"
+  if (label === "discipline_risk") return "计划外交易需要进入错误库或纪律约束候选。"
+  return "中性样本保留用于边界条件学习。"
+}
+
+function buildReport(projectPath, samples, candidates, diagnostics, sourceMode) {
   const countsByLabel = samples.reduce((acc, sample) => {
+    const key = sample.label.result
+    acc[key] = (acc[key] ?? 0) + 1
+    return acc
+  }, {})
+  const candidatesByLabel = candidates.reduce((acc, sample) => {
     const key = sample.label.result
     acc[key] = (acc[key] ?? 0) + 1
     return acc
@@ -201,9 +264,13 @@ function buildReport(projectPath, samples, diagnostics) {
     generatedAt: nowLocalTimestamp(),
     projectPath,
     outputPath: OUTPUT_PATH,
+    candidatesOutputPath: CANDIDATES_OUTPUT_PATH,
     counts: {
       samples: samples.length,
       byLabel: countsByLabel,
+      candidates: candidates.length,
+      candidatesByLabel,
+      sourceMode,
       hypothesisParseErrors: diagnostics.hypothesisParseErrors.length,
       validationParseErrors: diagnostics.validationParseErrors.length,
     },
@@ -217,7 +284,8 @@ function buildReport(projectPath, samples, diagnostics) {
 
 function buildMarkdown(report) {
   const labels = Object.entries(report.counts.byLabel).map(([key, value]) => `- ${key}: ${value}`).join("\n") || "- 无"
-  return `# LoRA-ready Training Dataset\n\n生成时间：${report.generatedAt}\n\n## 输出\n\n- ${report.outputPath}\n\n## 样本\n\n- 总数：${report.counts.samples}\n\n${labels}\n\n## 边界\n\n- 只从已存在账本抽样，不生成新交易建议。\n- 不写 raw/**，不写正式 wiki 页面。\n- 当前是 LoRA-ready 格式，不自动启动训练。\n`
+  const candidateLabels = Object.entries(report.counts.candidatesByLabel).map(([key, value]) => `- ${key}: ${value}`).join("\n") || "- 无"
+  return `# LoRA-ready Training Dataset\n\n生成时间：${report.generatedAt}\n\n## 输出\n\n- 可训练样本：${report.outputPath}\n- 全量候选样本：${report.candidatesOutputPath}\n\n## 可训练样本\n\n- 总数：${report.counts.samples}\n\n${labels}\n\n## 全量候选\n\n- 总数：${report.counts.candidates}\n\n${candidateLabels}\n\n## 边界\n\n- pending 未验证轨迹只进入候选集，不进入正式训练样本。\n- 只从已存在账本抽样，不生成新交易建议。\n- 不写 raw/**，不写正式 wiki 页面。\n- 当前是 LoRA-ready 格式，不自动启动训练。\n`
 }
 
 function main() {
@@ -227,19 +295,25 @@ function main() {
     return
   }
   const projectPath = path.resolve(args.project ?? DEFAULT_PROJECT_PATH)
+  const trajectories = readJsonl(path.join(projectPath, TRAJECTORIES_PATH))
   const hypotheses = readJsonl(path.join(projectPath, HYPOTHESES_PATH))
   const validations = readJsonl(path.join(projectPath, VALIDATIONS_PATH))
   const validationsByTarget = latestValidationsByTarget(validations.rows)
-  const samples = hypotheses.rows
-    .filter((row) => row?.id && validationsByTarget.has(row.id))
-    .map((row) => buildSample(row, validationsByTarget.get(row.id)))
+  const sourceMode = trajectories.rows.length > 0 ? "trajectories" : "hypothesis-validations"
+  const candidates = (trajectories.rows.length > 0
+    ? trajectories.rows.map(buildTrajectorySample)
+    : hypotheses.rows
+      .filter((row) => row?.id && validationsByTarget.has(row.id))
+      .map((row) => buildSample(row, validationsByTarget.get(row.id))))
     .sort((a, b) => String(a.input.tradeDate ?? "").localeCompare(String(b.input.tradeDate ?? "")) || a.id.localeCompare(b.id))
-  const report = buildReport(projectPath, samples, {
+  const samples = candidates.filter((sample) => sample.label.result !== "pending")
+  const report = buildReport(projectPath, samples, candidates, {
     hypothesisParseErrors: hypotheses.parseErrors,
     validationParseErrors: validations.parseErrors,
-  })
+  }, sourceMode)
   if (args.write) {
     writeJsonl(path.join(projectPath, OUTPUT_PATH), samples)
+    writeJsonl(path.join(projectPath, CANDIDATES_OUTPUT_PATH), candidates)
     const stamp = idTimestamp()
     const outDir = path.join(projectPath, REPORT_ROOT)
     writeJson(path.join(outDir, `${stamp}-training-lora-report.json`), report)

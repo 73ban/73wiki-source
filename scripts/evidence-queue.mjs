@@ -16,6 +16,8 @@ const ARTIFACTS = {
   brainHealth: ".llm-wiki/brain-health/latest-brain-health.json",
 }
 
+const PREVIOUS_QUEUE_PATH = ".llm-wiki/evidence-queue/latest-evidence-queue.json"
+
 function parseArgs(argv) {
   const args = { _: [] }
   for (let index = 0; index < argv.length; index += 1) {
@@ -314,20 +316,36 @@ function buildMarkdown(report) {
   return `${lines.join("\n")}\n`
 }
 
+function applyPreviousState(projectPath, tasks) {
+  const previous = readJsonMaybe(path.join(projectPath, PREVIOUS_QUEUE_PATH))
+  const previousById = new Map(toArray(previous?.tasks).map((task) => [task.id, task]))
+  return tasks.map((task) => {
+    const old = previousById.get(task.id)
+    if (!old || old.status === "pending") return task
+    return {
+      ...task,
+      status: old.status,
+      reviewedAt: old.reviewedAt ?? null,
+      reviewerNote: old.reviewerNote ?? null,
+      resolution: old.resolution ?? null,
+    }
+  })
+}
+
 function buildReport(projectPath) {
   const now = new Date()
   const artifacts = Object.fromEntries(Object.entries(ARTIFACTS).map(([key, relativePath]) => [
     key,
     readJsonMaybe(path.join(projectPath, relativePath)),
   ]))
-  const tasks = dedupeTasks([
+  const tasks = applyPreviousState(projectPath, dedupeTasks([
     ...collectCorrectionTasks(artifacts.correctionAlerts),
     ...collectWatchlistTasks(artifacts.watchlist),
     ...collectStockReasonTasks(artifacts.stockReasonCards),
     ...collectExecutionAuditTasks(artifacts.executionAudit),
     ...collectValidationTasks(artifacts.hypothesisValidation),
     ...collectPostSellTasks(artifacts.postSellValidation),
-  ])
+  ]))
   const counts = {
     total: tasks.length,
     high: tasks.filter((item) => item.priority >= 80).length,
