@@ -1,6 +1,7 @@
 param(
   [string]$ProjectPath = "",
-  [int]$BatchSize = 80
+  [int]$BatchSize = 80,
+  [switch]$SkipDbImport
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,10 +19,15 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 Set-Location -LiteralPath $SourcePath
 
 $startedAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value "[$startedAt] start raw consumer batchSize=$BatchSize project=$ProjectPath"
+$skipDbImportText = if ($SkipDbImport) { "true" } else { "false" }
+Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value "[$startedAt] start raw consumer batchSize=$BatchSize skipDbImport=$skipDbImportText project=$ProjectPath"
 
 try {
-  node $ConsumerScript --project $ProjectPath --once --batch-size $BatchSize *>&1 |
+  $consumerArgs = @($ConsumerScript, "--project", $ProjectPath, "--once", "--batch-size", "$BatchSize")
+  if ($SkipDbImport) {
+    $consumerArgs += "--skip-db-import"
+  }
+  node @consumerArgs *>&1 |
     ForEach-Object { Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value $_ }
   $exitCode = $LASTEXITCODE
 } catch {

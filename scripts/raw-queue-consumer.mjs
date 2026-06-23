@@ -22,7 +22,7 @@ function parseArgs(argv) {
       continue
     }
     const key = token.slice(2)
-    if (["once", "help"].includes(key)) {
+    if (["once", "help", "skip-db-import"].includes(key)) {
       args[key] = true
       continue
     }
@@ -108,7 +108,7 @@ function loadPendingBatch(projectPath, batchSize) {
   const queueRecords = readJsonlMaybe(queuePath)
   const registryRecords = readJsonlMaybe(registryPath)
   const seenKeys = new Set(registryRecords.map(registryKey).filter(Boolean))
-  const pending = []
+  const candidates = []
   const skipped = []
   for (const record of queueRecords) {
     const key = registryKey(record)
@@ -119,7 +119,7 @@ function loadPendingBatch(projectPath, batchSize) {
       seenKeys.add(key)
       continue
     }
-    pending.push({
+    candidates.push({
       record,
       stat: verdict.stat,
       sourcePath: String(record.source_path),
@@ -127,7 +127,18 @@ function loadPendingBatch(projectPath, batchSize) {
     })
     seenKeys.add(key)
   }
-  pending.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)
+  candidates.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)
+  const pending = []
+  const selectedSourcePaths = new Set()
+  for (const item of candidates) {
+    const sourceKey = path.resolve(item.sourcePath).toLowerCase()
+    if (selectedSourcePaths.has(sourceKey)) {
+      skipped.push({ record: item.record, reason: "duplicate_source_path" })
+      continue
+    }
+    selectedSourcePaths.add(sourceKey)
+    pending.push(item)
+  }
   return { pending: pending.slice(0, Number(batchSize)), skipped }
 }
 
@@ -166,7 +177,7 @@ function extractDateFromText(value) {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`
 }
 
-function runStep(name, command, args, { allowFailure = false } = {}) {
+function runStep(name, command, args, { allowFailure = false, timeoutMs = 0 } = {}) {
   const startedAt = nowLocalTimestamp()
   const useShell = process.platform === "win32" && /(?:^|\\|\/)npm(?:\.cmd)?$/i.test(command)
   const result = spawnSync(command, args, {
@@ -175,6 +186,8 @@ function runStep(name, command, args, { allowFailure = false } = {}) {
     stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
     shell: useShell,
+    timeout: timeoutMs > 0 ? timeoutMs : undefined,
+    killSignal: "SIGTERM",
   })
   const finishedAt = nowLocalTimestamp()
   const ok = result.status === 0
@@ -188,6 +201,7 @@ function runStep(name, command, args, { allowFailure = false } = {}) {
     stdout: String(result.stdout ?? "").slice(-5000),
     stderr: String(result.stderr ?? "").slice(-5000),
     error: result.error?.message ?? null,
+    timedOut: result.error?.code === "ETIMEDOUT",
   }
   if (!ok && !allowFailure) {
     const err = new Error(`${name} failed`)
@@ -205,7 +219,7 @@ function npmBin() {
   return process.platform === "win32" ? "npm.cmd" : "npm"
 }
 
-function runPipeline(projectPath) {
+function runPipeline(projectPath, { skipDbImport = false } = {}) {
   const steps = []
   steps.push(runStep("prediction:candidates", process.execPath, [
     scriptPath("prediction-candidates.mjs"),
@@ -250,9 +264,24 @@ function runPipeline(projectPath) {
     "--max-themes", "80",
     "--write",
   ], { allowFailure: true }))
-  steps.push(runStep("db:import-facts", npmBin(), [
-    "run", "db:import-facts", "--", projectPath,
-  ], { allowFailure: true }))
+  if (skipDbImport) {
+    steps.push({
+      name: "db:import-facts",
+      ok: true,
+      status: 0,
+      startedAt: nowLocalTimestamp(),
+      finishedAt: nowLocalTimestamp(),
+      command: "skipped by --skip-db-import",
+      stdout: "",
+      stderr: "",
+      error: null,
+      skipped: true,
+    })
+  } else {
+    steps.push(runStep("db:import-facts", npmBin(), [
+      "run", "db:import-facts", "--", projectPath,
+    ], { allowFailure: true, timeoutMs: 180_000 }))
+  }
   return steps
 }
 
@@ -293,7 +322,7 @@ function reportPaths(projectPath) {
   }
 }
 
-function consumeOnce({ projectPath, batchSize }) {
+function consumeOnce({ projectPath, batchSize, skipDbImport = false }) {
   const startedAt = nowLocalTimestamp()
   const { pending, skipped } = loadPendingBatch(projectPath, batchSize)
   if (skipped.length > 0) {
@@ -307,6 +336,7 @@ function consumeOnce({ projectPath, batchSize }) {
       projectPath,
       pendingCount: 0,
       skippedCount: skipped.length,
+      skipDbImport,
       message: "No pending supported RAW files.",
     }
     writeState(projectPath, report)
@@ -323,7 +353,7 @@ function consumeOnce({ projectPath, batchSize }) {
   let ok = true
   let failedStep = null
   try {
-    steps = runPipeline(projectPath)
+    steps = runPipeline(projectPath, { skipDbImport })
   } catch (error) {
     ok = false
     failedStep = error?.step ?? { name: "unknown", error: error?.message ?? String(error) }
@@ -347,6 +377,7 @@ function consumeOnce({ projectPath, batchSize }) {
     projectPath,
     pendingCount: pending.length,
     skippedCount: skipped.length,
+    skipDbImport,
     processedFiles: pending.map((item) => item.relativePath),
     steps,
     failedStep,
@@ -374,14 +405,15 @@ async function main() {
   const projectPath = path.resolve(args.project ?? args._[0] ?? DEFAULT_PROJECT_PATH)
   const batchSize = Number(args["batch-size"] ?? args._[1] ?? 24)
   const seconds = Math.max(10, Number(args.seconds ?? args._[2] ?? 30))
+  const skipDbImport = Boolean(args["skip-db-import"])
   if (args.once) {
-    const report = consumeOnce({ projectPath, batchSize })
+    const report = consumeOnce({ projectPath, batchSize, skipDbImport })
     console.log(JSON.stringify(report, null, 2))
     return
   }
   while (true) {
     try {
-      consumeOnce({ projectPath, batchSize })
+      consumeOnce({ projectPath, batchSize, skipDbImport })
     } catch (error) {
       logError(projectPath, error)
     }

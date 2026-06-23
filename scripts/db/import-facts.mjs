@@ -567,6 +567,8 @@ function runPsql(sql, { captureStdout = true, quiet = false } = {}) {
     encoding: "utf8",
     stdio: ["pipe", captureStdout ? "pipe" : "ignore", "pipe"],
     maxBuffer: 64 * 1024 * 1024,
+    timeout: 120_000,
+    killSignal: "SIGTERM",
   })
   if (result.status !== 0) {
     throw new Error([result.error?.message, result.stdout, result.stderr].filter(Boolean).join("\n"))
@@ -580,8 +582,8 @@ function main() {
   let importedFactRecords = 0
   let batch = []
   let batchChars = 0
-  const maxBatchChars = 8 * 1024 * 1024
-  const maxBatchRecords = 500
+  const maxBatchChars = 1024 * 1024
+  const maxBatchRecords = 100
 
   function flushBatch() {
     if (batch.length === 0) return
