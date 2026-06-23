@@ -549,6 +549,12 @@ async function runCollector({ projectPath, label, profile, maxSymbols, force }) 
       "100",
       "write",
     ], { allowFailure: true }))
+    steps.push(runStep("next-limitup:review", process.execPath, [
+      scriptPath("next-limitup-review.mjs"),
+      "--project",
+      projectPath,
+      "--write",
+    ], { allowFailure: true }))
   }
   steps.push(runStep("ths:hotlist:import", process.execPath, [
     scriptPath("ths-hotlist-import.mjs"),
