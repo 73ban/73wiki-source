@@ -10,6 +10,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 const REPORT_ROOT = ".llm-wiki/training-flywheel"
 
 const STEPS = [
+  { name: "market-regime", script: "market-regime.mjs" },
   { name: "evidence-queue", script: "evidence-queue.mjs" },
   { name: "review-manifest", script: "review-manifest.mjs" },
   { name: "next-limitup-review", script: "next-limitup-review.mjs" },

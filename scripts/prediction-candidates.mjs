@@ -281,7 +281,9 @@ function unique(values) {
 }
 
 function cleanName(value) {
-  const name = String(value ?? "").trim()
+  let name = String(value ?? "").trim()
+  name = name.replace(/^.*(?:买入|看到|关注|观察|低吸|打板|半路|追高|加仓|减仓|清仓|切到|切换到|换到|卖出|持有)/, "")
+  name = name.replace(/^[*＊\s]+/, "")
   if (!name) return ""
   if (/^(图片|截图|image)\s*\d+$/i.test(name)) return ""
   if (/^[*+=_#@!~`^|\\/-]+$/.test(name)) return ""
@@ -498,6 +500,7 @@ function mergeCandidate(map, code, patch) {
     evidence: [],
     lowValueMentions: 0,
     downgradeTags: [],
+    marketRegimeAdjustments: [],
   }
   const patchName = cleanName(patch.name)
   current.name = preferBetterName(current.name, patchName)
@@ -516,6 +519,7 @@ function mergeCandidate(map, code, patch) {
   current.evidence.push(...(patch.evidence ?? []))
   current.lowValueMentions += Number(patch.isLowValue ? 1 : 0)
   current.downgradeTags.push(...(patch.downgradeTags ?? []))
+  if (patch.marketRegime) current.marketRegimeAdjustments.push(patch.marketRegime)
   map.set(code, current)
 }
 
@@ -534,7 +538,144 @@ function normalizeCandidateScore(rawScore, mentions, sourceTags = []) {
   return Math.min(999, Math.round(normalized * positionBoost * 10) / 10)
 }
 
-function scorePatch({ src, direct, positives, risks, themes, context, known, relativePath }) {
+function clampScore(value, min = 0, max = 100) {
+  return Math.max(min, Math.min(max, Number(value) || 0))
+}
+
+function loadMarketRegime(projectPath) {
+  const regime = readJsonMaybe(path.join(projectPath, ".llm-wiki/market-regime/latest-market-regime.json"))
+  if (!regime || regime.status !== "active") return null
+  return regime
+}
+
+function summarizeMarketRegime(regime) {
+  if (!regime) return null
+  return {
+    id: regime.id,
+    evidenceTradeDate: regime.evidenceTradeDate ?? regime.tradeDate,
+    mode: regime.mode,
+    riskLevel: regime.riskLevel,
+    profitEffectScore: regime.profitEffectScore,
+    metrics: regime.metrics ?? {},
+    topThemes: (regime.topThemes ?? []).slice(0, 12),
+    recommendedBias: regime.recommendedBias ?? "",
+    summary: regime.summary ?? "",
+  }
+}
+
+function matchMarketThemes(themes = [], marketRegime = null) {
+  const entries = Object.values(marketRegime?.themeScores ?? {})
+  const tokens = unique((themes ?? []).map((item) => String(item ?? "").trim()).filter((item) => item.length >= 2))
+  const matches = []
+  for (const token of tokens) {
+    for (const entry of entries) {
+      const name = String(entry.name ?? "").trim()
+      if (!name) continue
+      if (token === name || token.includes(name) || name.includes(token)) {
+        matches.push({ theme: token, marketTheme: name, score: Number(entry.score ?? 0), latestCount: Number(entry.latestCount ?? 0) })
+      }
+    }
+  }
+  return matches
+    .sort((a, b) => b.score - a.score || b.latestCount - a.latestCount || a.theme.localeCompare(b.theme))
+    .slice(0, 5)
+}
+
+function marketRegimeAdjustment({ themes, srcTag, risks, marketRegime }) {
+  if (!marketRegime) {
+    return {
+      active: false,
+      scoreDelta: 0,
+      tradeabilityDelta: 0,
+      expectationGapDelta: 0,
+      reasons: [],
+      invalidations: [],
+      matchedThemes: [],
+    }
+  }
+  const mode = marketRegime.mode ?? "unknown"
+  const riskLevel = marketRegime.riskLevel ?? "unknown"
+  const profitEffectScore = Number(marketRegime.profitEffectScore ?? 50)
+  const matchedThemes = matchMarketThemes(themes, marketRegime)
+  const bestThemeScore = matchedThemes[0]?.score ?? 0
+  let scoreDelta = 0
+  let tradeabilityDelta = 0
+  let expectationGapDelta = 0
+  const reasons = []
+  const invalidations = []
+
+  if (mode === "attack") {
+    scoreDelta += 8
+    tradeabilityDelta += 3
+    expectationGapDelta += 1
+    reasons.push("Market regime supports attack: recent profit effect is strong")
+  } else if (mode === "mixed") {
+    scoreDelta += 3
+    tradeabilityDelta += 1
+    reasons.push("Market regime is mixed: only theme-confirmed candidates get upgraded")
+  } else if (mode === "selective") {
+    scoreDelta -= 5
+    tradeabilityDelta -= 2
+    invalidations.push("Market regime is selective; avoid weak follow-through")
+  } else if (mode === "defensive") {
+    scoreDelta -= 12
+    tradeabilityDelta -= 5
+    expectationGapDelta -= 3
+    invalidations.push("Market regime is defensive; standalone catalysts need confirmation")
+  }
+
+  if (matchedThemes.length > 0) {
+    const themeBonus = clampScore(Math.round(bestThemeScore * 1.1), 0, 14)
+    scoreDelta += themeBonus
+    tradeabilityDelta += clampScore(Math.round(bestThemeScore * 0.35), 0, 5)
+    reasons.push(`Market hot-theme match: ${matchedThemes.map((item) => item.marketTheme).join(" / ")}`)
+  } else if (["selective", "defensive"].includes(mode) && !["position", "post-sell-rewatch"].includes(srcTag)) {
+    scoreDelta -= 10
+    tradeabilityDelta -= 3
+    invalidations.push("No recent hot-theme confirmation")
+  }
+
+  if (riskLevel === "high") {
+    scoreDelta -= 10
+    tradeabilityDelta -= 4
+    invalidations.push("High burst/limit-down pressure reduces next-day certainty")
+  } else if (riskLevel === "medium" && risks.length > 0) {
+    scoreDelta -= 5
+    tradeabilityDelta -= 2
+    invalidations.push("Medium market risk plus stock-specific risk")
+  }
+
+  if (srcTag === "position" && scoreDelta < 0) scoreDelta = Math.round(scoreDelta * 0.55)
+  return {
+    active: true,
+    mode,
+    riskLevel,
+    profitEffectScore,
+    scoreDelta,
+    tradeabilityDelta,
+    expectationGapDelta,
+    matchedThemes,
+    reasons,
+    invalidations,
+  }
+}
+
+function summarizeCandidateRegimeAdjustments(adjustments = []) {
+  const active = adjustments.filter((item) => item?.active)
+  if (active.length === 0) return null
+  const avg = (field) => Math.round((active.reduce((sum, item) => sum + Number(item[field] ?? 0), 0) / active.length) * 10) / 10
+  return {
+    mode: active[0].mode,
+    riskLevel: active[0].riskLevel,
+    profitEffectScore: active[0].profitEffectScore,
+    averageScoreDelta: avg("scoreDelta"),
+    averageTradeabilityDelta: avg("tradeabilityDelta"),
+    evidenceCount: active.length,
+    matchedThemes: unique(active.flatMap((item) => item.matchedThemes?.map((match) => match.marketTheme) ?? [])).slice(0, 8),
+  }
+}
+
+function scorePatch({ src, direct, positives, risks, themes, context, known, relativePath, marketRegime }) {
   const normalizedThemes = normalizeThemes(themes, known?.themes ?? [])
   const gapHits = keywordHits(context, GAP_KEYWORDS)
   const tradeHits = keywordHits(context, TRADEABILITY_KEYWORDS)
@@ -558,7 +699,16 @@ function scorePatch({ src, direct, positives, risks, themes, context, known, rel
     expectationGap = Math.min(expectationGap, 20)
     nextDayTradeability = Math.min(nextDayTradeability, 30)
   }
+  const regimeAdjustment = marketRegimeAdjustment({
+    themes: normalizedThemes.effective,
+    srcTag: src.tag,
+    risks,
+    marketRegime,
+  })
+  expectationGap = clampScore(expectationGap + regimeAdjustment.expectationGapDelta)
+  nextDayTradeability = clampScore(nextDayTradeability + regimeAdjustment.tradeabilityDelta)
   let score = Math.round((novelty * 1.5 + expectationGap * 1.9 + nextDayTradeability * 2.2 + src.weight * 0.7 - risks.length * 12 - broadThemePenalty) * 10) / 10
+  score = Math.max(0, Math.round((score + regimeAdjustment.scoreDelta) * 10) / 10)
   if (downgrade) score = Math.max(0, score - downgrade.scorePenalty)
   if (reviewTable) score = Math.max(0, score - 110)
   if (genericReview) score = Math.max(0, score - 70)
@@ -571,16 +721,19 @@ function scorePatch({ src, direct, positives, risks, themes, context, known, rel
     isLowValue: Boolean(downgrade || reviewTable || genericReview),
     downgradeTags: unique([...(downgrade?.tags ?? []), ...(reviewTable ? ["daily-review-table"] : []), ...(genericReview ? ["daily-review-generic"] : [])]),
     blockUpgrade: Boolean(downgrade?.blockUpgrade),
+    marketRegime: regimeAdjustment,
     reasons: unique([
       downgrade ? `Downgraded low-signal source: ${downgrade.tags.join(" / ")}` : "",
       reviewTable ? "Daily review table is evidence-only, not standalone catalyst" : "",
       genericReview ? "Generic review summary is evidence-only, not standalone catalyst" : "",
+      ...regimeAdjustment.reasons,
       gapHits.length > 0 ? `?????????${gapHits.join("??")}` : "",
       positives.length > 0 ? `????????${positives.slice(0, 4).join("??")}` : "",
       themes.length > 0 ? `????????${themes.slice(0, 4).join("??")}` : "",
     ].filter(Boolean)),
     invalidations: unique([
       (downgrade?.blockUpgrade || reviewTable || genericReview) ? "facts-only source; do not promote standalone candidate" : "",
+      ...regimeAdjustment.invalidations,
       "?????????",
       "9:31-9:50 ?????",
       themes.length > 0 ? "????????" : "",
@@ -591,6 +744,7 @@ function scorePatch({ src, direct, positives, risks, themes, context, known, rel
 
 function scanPredictionSignals(projectPath, options = {}) {
   const knownStocks = collectKnownStocks(projectPath)
+  const marketRegime = loadMarketRegime(projectPath)
   const candidates = new Map()
   const tradeDate = options.tradeDate ?? nextTradingDate()
   const files = recentRawFiles(projectPath, {
@@ -616,7 +770,7 @@ function scanPredictionSignals(projectPath, options = {}) {
       const name = preferBetterName(known?.name, extractName(content, match.code, match.index))
       if (!known && !isLikelyStockName(name)) continue
       if (!name && !known) continue
-      const metrics = scorePatch({ src, direct: true, positives, risks, themes, context, known, relativePath: file.relativePath })
+      const metrics = scorePatch({ src, direct: true, positives, risks, themes, context, known, relativePath: file.relativePath, marketRegime })
       mergeCandidate(candidates, match.code, {
         name,
         ...metrics,
@@ -646,7 +800,7 @@ function scanPredictionSignals(projectPath, options = {}) {
       const risks = keywordHits(context, RISK_KEYWORDS)
       const themes = unique([...fileThemes, ...keywordHits(context, THEME_KEYWORDS), ...(stock.themes ?? [])])
       if (positives.length === 0 && themes.length === 0 && !/持仓|明日|盘前|早报|复盘/.test(context)) continue
-      const metrics = scorePatch({ src, direct: false, positives, risks, themes, context, known: stock, relativePath: file.relativePath })
+      const metrics = scorePatch({ src, direct: false, positives, risks, themes, context, known: stock, relativePath: file.relativePath, marketRegime })
       mergeCandidate(candidates, stock.code, {
         name: stock.name,
         ...metrics,
@@ -721,6 +875,7 @@ function scanPredictionSignals(projectPath, options = {}) {
   }
 
   return {
+    marketRegime: summarizeMarketRegime(marketRegime),
     filesScanned: files.length,
     sourceFiles: files.map((item) => item.relativePath),
     candidates: [...candidates.values()]
@@ -739,6 +894,7 @@ function scanPredictionSignals(projectPath, options = {}) {
         evidence: item.evidence.slice(0, 6),
         lowValueOnly: Number(item.lowValueMentions ?? 0) >= Number(item.mentions ?? 0),
         downgradeTags: unique(item.downgradeTags).slice(0, 6),
+        marketRegime: summarizeCandidateRegimeAdjustments(item.marketRegimeAdjustments),
       }))
       .filter((item) => item.name || item.sourceTags.includes("position") || item.sourceTags.includes("daily-review") || item.sourceTags.includes("post-sell-rewatch")),
   }
@@ -788,9 +944,18 @@ function markdownReport(record) {
     `Files scanned: ${record.filesScanned}`,
     `Date status: ${record.hasDateMismatch ? "mismatch" : "aligned"}`,
     "",
-    "## Top Prediction Candidates",
-    "",
   ]
+  if (record.marketRegime) {
+    lines.push("## Market Regime")
+    lines.push("")
+    lines.push(`- Mode: ${record.marketRegime.mode}`)
+    lines.push(`- Risk level: ${record.marketRegime.riskLevel}`)
+    lines.push(`- Profit effect score: ${record.marketRegime.profitEffectScore}`)
+    lines.push(`- Evidence trade date: ${record.marketRegime.evidenceTradeDate}`)
+    lines.push(`- Bias: ${record.marketRegime.recommendedBias || "n/a"}`)
+    lines.push("")
+  }
+  lines.push("## Top Prediction Candidates", "")
   for (const item of record.candidates) {
     lines.push(`### ${item.rank}. ${item.name || item.code} (${item.code})`)
     lines.push(`- Score: ${item.score}`)
@@ -802,6 +967,7 @@ function markdownReport(record) {
     lines.push(`- AI subthemes: ${item.aiSubthemes?.join(" / ") || "n/a"}`)
     lines.push(`- Reasons: ${item.reasons.join(" | ") || "n/a"}`)
     lines.push(`- Invalidations: ${item.invalidations.join(" | ") || "n/a"}`)
+    if (item.marketRegime) lines.push(`- Market regime: mode=${item.marketRegime.mode}, risk=${item.marketRegime.riskLevel}, avgScoreDelta=${item.marketRegime.averageScoreDelta}, matched=${item.marketRegime.matchedThemes.join(" / ") || "n/a"}`)
     lines.push(`- Source tags: ${item.sourceTags.join(" / ") || "n/a"}`)
     for (const ev of item.evidence.slice(0, 3)) lines.push(`- Evidence: ${ev.file} :: ${ev.excerpt}`)
     lines.push("")
@@ -833,6 +999,7 @@ function run(options = {}) {
     projectPath,
     filesScanned: scanned.filesScanned,
     sourceFiles: scanned.sourceFiles.slice(0, 120),
+    marketRegime: scanned.marketRegime,
     candidateLimit: Number(options.candidateLimit ?? 30),
     candidates: classified.candidates,
     symbols: classified.symbols,
@@ -896,6 +1063,11 @@ function main() {
       planTradeDate: result.record.planTradeDate,
       evidenceTradeDate: result.record.evidenceTradeDate,
       hasDateMismatch: result.record.hasDateMismatch,
+      marketRegime: result.record.marketRegime ? {
+        mode: result.record.marketRegime.mode,
+        riskLevel: result.record.marketRegime.riskLevel,
+        profitEffectScore: result.record.marketRegime.profitEffectScore,
+      } : null,
       filesScanned: result.record.filesScanned,
       candidates: result.record.candidates.slice(0, 10).map((item) => ({
         rank: item.rank,

@@ -207,6 +207,7 @@ function buildAudit(projectPath) {
     trainingFlywheel: statInfo(path.join(llmRoot, "training-flywheel", "latest-training-flywheel.json")),
     authorityNews: statInfo(path.join(llmRoot, "authority-news", "latest-authority-news.json")),
     rawQueueConsumer: statInfo(path.join(llmRoot, "raw-queue-consumer", "latest-raw-queue-consumer.json")),
+    marketRegime: statInfo(path.join(llmRoot, "market-regime", "latest-market-regime.json")),
     marketCollect: statInfo(path.join(llmRoot, "market-collect", "latest-market-collect.json")),
     thsHotlist: statInfo(path.join(llmRoot, "ths-hotlist", "latest-ths-hotlist.json")),
   }
@@ -260,6 +261,7 @@ function buildAudit(projectPath) {
   }
   if (werssTasks.length === 0) warnings.push("no WeRSS/youzi scheduled task found")
   if (!artifacts.trainingFlywheel.exists) warnings.push("training flywheel report is missing")
+  if (!artifacts.marketRegime.exists) warnings.push("market regime report is missing")
 
   return {
     schema: "73wiki-pipeline-audit-v1",

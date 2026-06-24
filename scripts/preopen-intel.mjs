@@ -208,7 +208,9 @@ function unique(values) {
 }
 
 function cleanName(value) {
-  const name = String(value ?? "").trim()
+  let name = String(value ?? "").trim()
+  name = name.replace(/^.*(?:买入|看到|关注|观察|低吸|打板|半路|追高|加仓|减仓|清仓|切到|切换到|换到|卖出|持有)/, "")
+  name = name.replace(/^[*＊\s]+/, "")
   if (!name) return ""
   if (/^(图片|截图|image)\s*\d+$/i.test(name)) return ""
   if (/^[*+=_#@!~`^|\\/-]+$/.test(name)) return ""

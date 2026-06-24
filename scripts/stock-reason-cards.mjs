@@ -227,8 +227,15 @@ function cleanContext(context) {
     .trim()
 }
 
+function cleanName(value) {
+  let name = String(value ?? "").trim()
+  name = name.replace(/^.*(?:买入|看到|关注|观察|低吸|打板|半路|追高|加仓|减仓|清仓|切到|切换到|换到|卖出|持有)/, "")
+  name = name.replace(/^[*＊\s]+/, "")
+  return name
+}
+
 function nameQuality(value) {
-  const name = String(value ?? "").trim()
+  const name = cleanName(value)
   if (!name) return -Infinity
   let score = 0
   const hasCjk = /[\u4e00-\u9fff]/.test(name)
@@ -243,8 +250,8 @@ function nameQuality(value) {
 }
 
 function preferBetterName(current, candidate) {
-  const currentName = String(current ?? "").trim()
-  const candidateName = String(candidate ?? "").trim()
+  const currentName = cleanName(current)
+  const candidateName = cleanName(candidate)
   if (!candidateName) return currentName
   if (!currentName) return candidateName
   return nameQuality(candidateName) > nameQuality(currentName) ? candidateName : currentName

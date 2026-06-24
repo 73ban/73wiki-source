@@ -23,6 +23,7 @@
     "raw:consume": "node scripts/raw-queue-consumer.mjs",
     "archive:skeletons": "node scripts/archive-skeletons.mjs",
     "preopen:intel": "node scripts/preopen-intel.mjs",
+    "market:regime": "node scripts/market-regime.mjs --write",
     "market:watchlist": "node scripts/market-watchlist.mjs",
     "market:collect": "node scripts/market-collect.mjs",
     "minute:bars": "node scripts/minute-bars.mjs sync",

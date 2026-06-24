@@ -555,6 +555,12 @@ async function runCollector({ projectPath, label, profile, maxSymbols, force }) 
       projectPath,
       "--write",
     ], { allowFailure: true }))
+    steps.push(runStep("market:regime", process.execPath, [
+      scriptPath("market-regime.mjs"),
+      "--project",
+      projectPath,
+      "--write",
+    ], { allowFailure: true }))
   }
   steps.push(runStep("ths:hotlist:import", process.execPath, [
     scriptPath("ths-hotlist-import.mjs"),
