@@ -19,6 +19,7 @@
     "tdx:mcp": "node scripts/tdx-mcp.mjs",
     "tdx:hotlist": "node scripts/tdx-hotlist.mjs",
     "ths:hotlist:import": "node scripts/ths-hotlist-import.mjs",
+    "ths:hotlist:capture": "node scripts/ths-hotlist-capture-import.mjs",
     "prediction:candidates": "node scripts/prediction-candidates.mjs",
     "raw:consume": "node scripts/raw-queue-consumer.mjs",
     "archive:skeletons": "node scripts/archive-skeletons.mjs",

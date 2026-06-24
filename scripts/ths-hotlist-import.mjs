@@ -4,7 +4,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 const DEFAULT_PROJECT_PATH = process.env.WIKI_PROJECT_PATH ?? "C:/wiki/73神话"
-const DEFAULT_CAPTURE_DIR = process.env.THS_HOTLIST_CAPTURE_DIR ?? "C:/Users/Administrator/Desktop/workspace/热榜抓取/同花顺"
+const DEFAULT_CAPTURE_DIR = process.env.THS_HOTLIST_CAPTURE_DIR ?? "C:/Users/Administrator/Desktop/workspace/ths-hotlist-captures"
 const FACT_PATH = "data/facts/ths_hotlist_snapshots.jsonl"
 const REPORT_ROOT = ".llm-wiki/ths-hotlist"
 
@@ -115,6 +115,13 @@ function latestCaptureFile(captureDir) {
   return files[0]
 }
 
+function resolveCaptureFile({ captureFile, captureDir }) {
+  if (!captureFile) return latestCaptureFile(captureDir)
+  const fullPath = path.resolve(captureFile)
+  if (!fs.existsSync(fullPath)) throw new Error(`THS capture file not found: ${fullPath}`)
+  return { name: path.basename(fullPath), fullPath, stat: fs.statSync(fullPath) }
+}
+
 function normalizeRows(rows, maxItems) {
   return (Array.isArray(rows) ? rows : [])
     .map((row, index) => {
@@ -139,8 +146,8 @@ function normalizeRows(rows, maxItems) {
     .slice(0, Number(maxItems))
 }
 
-function buildRecord({ projectPath, captureDir, maxItems }) {
-  const capture = latestCaptureFile(captureDir)
+function buildRecord({ projectPath, captureDir, captureFile, maxItems }) {
+  const capture = resolveCaptureFile({ captureFile, captureDir })
   const payload = JSON.parse(fs.readFileSync(capture.fullPath, "utf8"))
   const rows = normalizeRows(payload?.rows, maxItems)
   const observedAt = parseObservedAt(capture.name) ?? nowLocalTimestamp(capture.stat.mtime)
@@ -195,6 +202,7 @@ function printHelp() {
   console.log(`Usage:
   npm run ths:hotlist:import -- --project C:\\wiki\\73神话 --write
   node scripts/ths-hotlist-import.mjs --capture-dir C:\\path\\to\\ths --max-items 100 --write
+  node scripts/ths-hotlist-import.mjs --capture-file C:\\path\\to\\ths-hotlist.json --max-items 100 --write
 `)
 }
 
@@ -207,8 +215,9 @@ function main() {
 
   const projectPath = path.resolve(args.project ?? args._[0] ?? DEFAULT_PROJECT_PATH)
   const captureDir = path.resolve(args["capture-dir"] ?? DEFAULT_CAPTURE_DIR)
+  const captureFile = args["capture-file"] ? path.resolve(args["capture-file"]) : null
   const maxItems = Number(args["max-items"] ?? args._[1] ?? 100)
-  const record = buildRecord({ projectPath, captureDir, maxItems })
+  const record = buildRecord({ projectPath, captureDir, captureFile, maxItems })
   const reportDir = path.join(projectPath, REPORT_ROOT)
   const reportPath = path.join(reportDir, `${idTimestamp()}-ths-hotlist.json`)
   const latestPath = path.join(reportDir, "latest-ths-hotlist.json")

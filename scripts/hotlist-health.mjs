@@ -16,7 +16,7 @@ function parseArgs(argv) {
       continue
     }
     const key = token.slice(2)
-    if (["write", "json", "help"].includes(key)) {
+    if (["write", "json", "help", "require-tdx"].includes(key)) {
       args[key] = true
       continue
     }
@@ -82,18 +82,21 @@ function projectRelative(projectPath, targetPath) {
   return path.relative(path.resolve(projectPath), path.resolve(targetPath)).replace(/\\/g, "/")
 }
 
-function evaluateSource(name, record, stat, minRows, maxAgeHours) {
+function evaluateSource(name, record, stat, minRows, maxAgeHours, options = {}) {
   const rows = record?.rows ?? record?.items ?? []
   const issues = []
   const warnings = []
-  if (!stat.exists) issues.push(`${name} report missing`)
-  if (stat.ageHours != null && stat.ageHours > maxAgeHours) warnings.push(`${name} report stale: ${stat.ageHours}h`)
-  if (rows.length < minRows) warnings.push(`${name} rows ${rows.length}/${minRows}`)
+  const required = options.required !== false
+  if (!stat.exists && required) issues.push(`${name} report missing`)
+  if (required && stat.ageHours != null && stat.ageHours > maxAgeHours) warnings.push(`${name} report stale: ${stat.ageHours}h`)
+  if (required && rows.length < minRows) warnings.push(`${name} rows ${rows.length}/${minRows}`)
   const duplicateCodes = rows.length - new Set(rows.map((row) => row.code ?? row.sec_code).filter(Boolean)).size
   if (duplicateCodes > 0) warnings.push(`${name} duplicate codes: ${duplicateCodes}`)
   return {
     name,
-    ok: issues.length === 0,
+    required,
+    deprecated: Boolean(options.deprecated),
+    ok: !required || issues.length === 0,
     rows: rows.length,
     minRows,
     ageHours: stat.ageHours,
@@ -110,9 +113,13 @@ function buildRecord(projectPath, options = {}) {
   const thsPath = path.join(llm, "ths-hotlist", "latest-ths-hotlist.json")
   const tdxPath = path.join(llm, "tdx-hotlist", "latest-tdx-hotlist.json")
   const ths = evaluateSource("ths-hotlist", readJsonMaybe(thsPath), statInfo(thsPath), Number(options.minThsRows ?? 80), Number(options.maxAgeHours ?? 24))
-  const tdx = evaluateSource("tdx-hotlist", readJsonMaybe(tdxPath), statInfo(tdxPath), Number(options.minTdxRows ?? 80), Number(options.maxAgeHours ?? 48))
-  const issues = [...ths.issues, ...tdx.issues]
-  const warnings = [...ths.warnings, ...tdx.warnings]
+  const requireTdx = Boolean(options.requireTdx)
+  const tdx = evaluateSource("tdx-hotlist", readJsonMaybe(tdxPath), statInfo(tdxPath), Number(options.minTdxRows ?? 0), Number(options.maxAgeHours ?? 48), {
+    required: requireTdx,
+    deprecated: true,
+  })
+  const issues = [...ths.issues, ...(requireTdx ? tdx.issues : [])]
+  const warnings = [...ths.warnings, ...(requireTdx ? tdx.warnings : [])]
   const generatedAt = nowLocalTimestamp()
   return {
     schema: "73wiki-hotlist-health-v1",
@@ -137,8 +144,8 @@ Status: ${record.ok ? "ok" : "needs-attention"}
 
 ## Sources
 
-- THS: rows=${record.sources.ths.rows}, age=${record.sources.ths.ageHours ?? "-"}h, warnings=${record.sources.ths.warnings.length}
-- TDX: rows=${record.sources.tdx.rows}, age=${record.sources.tdx.ageHours ?? "-"}h, warnings=${record.sources.tdx.warnings.length}
+- THS: rows=${record.sources.ths.rows}, age=${record.sources.ths.ageHours ?? "-"}h, required=${record.sources.ths.required}, warnings=${record.sources.ths.warnings.length}
+- TDX: rows=${record.sources.tdx.rows}, age=${record.sources.tdx.ageHours ?? "-"}h, required=${record.sources.tdx.required}, deprecated=${record.sources.tdx.deprecated}, warnings=${record.sources.tdx.warnings.length}
 
 ## Issues
 
@@ -171,14 +178,15 @@ function run(options = {}) {
 function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) {
-    console.log("Usage: node scripts/hotlist-health.mjs --project <wiki-root> --write")
+    console.log("Usage: node scripts/hotlist-health.mjs --project <wiki-root> --write [--require-tdx]")
     return
   }
   const result = run({
     projectPath: args.project ?? args._[0] ?? DEFAULT_PROJECT_PATH,
     minThsRows: Number(args["min-ths-rows"] ?? 80),
-    minTdxRows: Number(args["min-tdx-rows"] ?? 80),
+    minTdxRows: Number(args["min-tdx-rows"] ?? 0),
     maxAgeHours: Number(args["max-age-hours"] ?? 48),
+    requireTdx: Boolean(args["require-tdx"]),
     write: Boolean(args.write || args._.includes("write")),
   })
   if (args.json) console.log(JSON.stringify(result, null, 2))

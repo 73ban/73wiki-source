@@ -602,8 +602,8 @@ async function runCollector({ projectPath, label, profile, maxSymbols, force }) 
       "--write",
     ], { allowFailure: true }))
   }
-  steps.push(runStep("ths:hotlist:import", process.execPath, [
-    scriptPath("ths-hotlist-import.mjs"),
+  steps.push(runStep("ths:hotlist:capture", process.execPath, [
+    scriptPath("ths-hotlist-capture-import.mjs"),
     "--project",
     projectPath,
     "--max-items",

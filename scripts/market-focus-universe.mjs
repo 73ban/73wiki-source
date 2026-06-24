@@ -17,7 +17,7 @@ function parseArgs(argv) {
       continue
     }
     const key = token.slice(2)
-    if (["write", "json", "help"].includes(key)) {
+    if (["write", "json", "help", "include-stale-tdx"].includes(key)) {
       args[key] = true
       continue
     }
@@ -85,6 +85,21 @@ function readJsonMaybe(filePath) {
   } catch {
     return null
   }
+}
+
+function recordAgeHours(record) {
+  const timestamp = record?.generatedAt ?? record?.observedAt ?? null
+  if (!timestamp) return null
+  const date = new Date(String(timestamp).replace(" ", "T"))
+  if (Number.isNaN(date.getTime())) return null
+  return Math.round(((Date.now() - date.getTime()) / 3600000) * 10) / 10
+}
+
+function isFreshRecord(record, maxAgeHours) {
+  if (!record) return false
+  const ageHours = recordAgeHours(record)
+  if (ageHours == null) return false
+  return ageHours <= Number(maxAgeHours)
 }
 
 function writeJson(filePath, value) {
@@ -324,10 +339,13 @@ function inferRole(item, regime) {
 
 function buildUniverse(projectPath, options = {}) {
   const artifacts = latestArtifacts(projectPath)
+  const tdxHotlist = options.includeStaleTdx
+    ? artifacts.tdxHotlist
+    : isFreshRecord(artifacts.tdxHotlist, options.maxTdxAgeHours ?? 48) ? artifacts.tdxHotlist : null
   const map = new Map()
   addMarketStrength(map, artifacts.marketStrength, options)
   addThsHotlist(map, artifacts.thsHotlist, options.hotlistLimit ?? 100)
-  addTdxHotlist(map, artifacts.tdxHotlist, options.hotlistLimit ?? 100)
+  addTdxHotlist(map, tdxHotlist, options.hotlistLimit ?? 100)
   addPrediction(map, artifacts.prediction, options.predictionLimit ?? 80)
   addEmotionPools(map, artifacts.emotion)
   addWatchlist(map, artifacts.watchlist)
@@ -377,7 +395,12 @@ function buildUniverse(projectPath, options = {}) {
     sources: {
       marketStrength: artifacts.marketStrength?.id ?? null,
       thsHotlist: artifacts.thsHotlist?.id ?? null,
-      tdxHotlist: artifacts.tdxHotlist?.id ?? null,
+      tdxHotlist: tdxHotlist?.id ?? null,
+      tdxHotlistSkipped: artifacts.tdxHotlist && !tdxHotlist ? {
+        id: artifacts.tdxHotlist.id ?? null,
+        reason: "stale_or_missing_timestamp",
+        ageHours: recordAgeHours(artifacts.tdxHotlist),
+      } : null,
       prediction: artifacts.prediction?.id ?? null,
       emotion: artifacts.emotion?.id ?? null,
       watchlist: artifacts.watchlist?.id ?? null,
@@ -442,7 +465,7 @@ function run(options = {}) {
 function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) {
-    console.log("Usage: node scripts/market-focus-universe.mjs --project <wiki-root> --limit 500 --write")
+    console.log("Usage: node scripts/market-focus-universe.mjs --project <wiki-root> --limit 500 --write [--include-stale-tdx]")
     return
   }
   const result = run({
@@ -452,6 +475,8 @@ function main() {
     amountTop: Number(args["amount-top"] ?? 200),
     hotlistLimit: Number(args["hotlist-limit"] ?? 100),
     predictionLimit: Number(args["prediction-limit"] ?? 80),
+    maxTdxAgeHours: Number(args["max-tdx-age-hours"] ?? 48),
+    includeStaleTdx: Boolean(args["include-stale-tdx"]),
     write: Boolean(args.write || args._.includes("write")),
   })
   if (args.json) console.log(JSON.stringify(result, null, 2))
