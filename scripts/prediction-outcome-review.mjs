@@ -9,6 +9,7 @@ const REPORT_ROOT = ".llm-wiki/prediction-outcome-review"
 const FACT_PATH = "data/facts/prediction_outcome_reviews.jsonl"
 const TRAINING_PATH = "data/training/prediction_outcome_samples.jsonl"
 const PREDICTION_FACT_PATH = "data/facts/prediction_candidates.jsonl"
+const MARKET_STRENGTH_PATH = ".llm-wiki/market-strength-rank/latest-market-strength-rank.json"
 const CHECKPOINTS = [1, 3, 5]
 
 function parseArgs(argv) {
@@ -158,6 +159,15 @@ function readJsonl(filePath) {
       }
     })
     .filter(Boolean)
+}
+
+function readJsonMaybe(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null
+    return JSON.parse(fs.readFileSync(filePath, "utf8"))
+  } catch {
+    return null
+  }
 }
 
 function httpGetJson(url) {
@@ -357,6 +367,37 @@ function aggregateCounts(reviews, field) {
   return out
 }
 
+function loadMarketStrength(projectPath, asOfDate) {
+  const record = readJsonMaybe(path.join(projectPath, MARKET_STRENGTH_PATH))
+  if (!record || record.status !== "active") return null
+  const evidenceTradeDate = normalizeTradeDate(record.evidenceTradeDate)
+  if (evidenceTradeDate !== normalizeTradeDate(asOfDate)) return null
+  const byCode = new Map((record.rows ?? []).map((item) => [codeBase(item.code), item]))
+  return {
+    id: record.id,
+    evidenceTradeDate,
+    rankingScope: record.rankingScope ?? null,
+    counts: record.counts ?? {},
+    byCode,
+  }
+}
+
+function fullMarketDailyRankFor(marketStrength, code) {
+  const row = marketStrength?.byCode?.get(codeBase(code))
+  if (!row) return null
+  return {
+    sourceId: marketStrength.id,
+    evidenceTradeDate: marketStrength.evidenceTradeDate,
+    scope: marketStrength.rankingScope?.type ?? "full_market_daily",
+    rank: row.fullMarketDailyRank ?? null,
+    percentile: row.fullMarketDailyPercentile ?? null,
+    changePercent: row.changePercent ?? null,
+    amountRank: row.amountRank ?? null,
+    amount: row.amount ?? null,
+    turnoverRate: row.turnoverRate ?? null,
+  }
+}
+
 function buildSample(record, item) {
   return {
     schema: "73wiki-prediction-outcome-sample-v1",
@@ -376,7 +417,9 @@ function buildSample(record, item) {
         predictedRank: item.rank,
         outcomeRank: item.rankByOutcome ?? null,
         playbookRank: item.rankByPlaybook ?? null,
+        fullMarketDailyRank: item.fullMarketDailyRank?.rank ?? null,
       },
+      fullMarketDailyRank: item.fullMarketDailyRank,
       outcomeMetrics: item.metrics,
     },
     output: {
@@ -393,6 +436,8 @@ function buildSample(record, item) {
       bestMaxGainPct: item.bestMaxGainPct,
       bestCloseGainPct: item.bestCloseGainPct,
       outcomeScore: item.outcomeScore ?? null,
+      fullMarketDailyRank: item.fullMarketDailyRank?.rank ?? null,
+      fullMarketDailyPercentile: item.fullMarketDailyRank?.percentile ?? null,
     },
     metadata: {
       createdAt: nowLocalTimestamp(),
@@ -418,6 +463,7 @@ function lessonFor(item) {
 async function reviewPredictionRecord(projectPath, predictionRecord, options = {}) {
   const tradeDate = normalizeTradeDate(predictionRecord.planTradeDate ?? predictionRecord.tradeDate)
   const asOfDate = normalizeTradeDate(options.asOfDate) ?? dateOnly()
+  const marketStrength = options.marketStrength ?? null
   const candidates = (predictionRecord.candidates ?? [])
     .slice(0, Number(options.candidateLimit ?? 30))
     .filter((item) => /^\d{6}$/.test(codeBase(item.code)))
@@ -434,6 +480,7 @@ async function reviewPredictionRecord(projectPath, predictionRecord, options = {
     const bestCloseGainPct = maxNum([d1.closeGainPct, d3.closeGainPct, d5.closeGainPct])
     const marketRegime = candidate.marketRegime ?? null
     const playbook = buildPlaybook(metrics, outcome, marketRegime)
+    const fullMarketDailyRank = fullMarketDailyRankFor(marketStrength, code)
     const item = {
       code,
       name: candidate.name ?? "",
@@ -447,6 +494,7 @@ async function reviewPredictionRecord(projectPath, predictionRecord, options = {
       metrics,
       outcome,
       playbook,
+      fullMarketDailyRank,
       bestMaxGainPct,
       bestCloseGainPct,
     }
@@ -499,6 +547,8 @@ async function reviewPredictionRecord(projectPath, predictionRecord, options = {
       label: item.outcome.label,
       playbook: item.playbook?.label ?? null,
       methodFit: item.playbook?.methodFit ?? null,
+      fullMarketDailyRank: item.fullMarketDailyRank?.rank ?? null,
+      fullMarketDailyChangePercent: item.fullMarketDailyRank?.changePercent ?? null,
       themes: item.themes.slice(0, 8),
     }))
   const playbookLeaders = Object.fromEntries(["trend_leader", "limit_board", "overnight_arbitrage", "swing_profit"].map((label) => [
@@ -517,6 +567,8 @@ async function reviewPredictionRecord(projectPath, predictionRecord, options = {
         outcomeScore: item.outcomeScore,
         label: item.outcome.label,
         methodFit: item.playbook?.methodFit ?? null,
+        fullMarketDailyRank: item.fullMarketDailyRank?.rank ?? null,
+        fullMarketDailyChangePercent: item.fullMarketDailyRank?.changePercent ?? null,
       })),
   ]))
   return {
@@ -540,8 +592,12 @@ async function reviewPredictionRecord(projectPath, predictionRecord, options = {
     trendLeaders,
     playbookLeaders,
     rankingScope: {
-      type: "prediction_pool",
-      note: "Ranks compare candidates in the prediction record. Full-market rank requires a complete all-A-share daily return snapshot.",
+      type: marketStrength ? "prediction_pool_plus_full_market_daily" : "prediction_pool",
+      fullMarketDailyAvailable: Boolean(marketStrength),
+      fullMarketDailySourceId: marketStrength?.id ?? null,
+      note: marketStrength
+        ? "Outcome ranks compare candidates in the prediction record; fullMarketDailyRank compares each stock against the whole A-share daily strength snapshot."
+        : "Outcome ranks compare candidates in the prediction record. Full-market rank requires a complete all-A-share daily return snapshot.",
     },
     items,
     writePolicy: {
@@ -576,14 +632,14 @@ function markdown(record) {
     "",
   ]
   for (const item of record.trendLeaders) {
-    lines.push(`- ${item.rankByOutcome}. ${item.name || item.code}(${item.code}) predictedRank=${item.predictedRank ?? "-"} max=${item.bestMaxGainPct ?? "-"}% close=${item.bestCloseGainPct ?? "-"}% score=${item.outcomeScore ?? "-"} label=${item.label} playbook=${item.playbook ?? "-"}`)
+    lines.push(`- ${item.rankByOutcome}. ${item.name || item.code}(${item.code}) predictedRank=${item.predictedRank ?? "-"} max=${item.bestMaxGainPct ?? "-"}% close=${item.bestCloseGainPct ?? "-"}% score=${item.outcomeScore ?? "-"} label=${item.label} playbook=${item.playbook ?? "-"} fullMarketD1Rank=${item.fullMarketDailyRank ?? "-"}`)
   }
   lines.push("", "## Method Leaders", "")
   for (const [label, leaders] of Object.entries(record.playbookLeaders ?? {})) {
     if (!leaders.length) continue
     lines.push(`### ${label}`)
     for (const item of leaders) {
-      lines.push(`- ${item.rankByPlaybook}. ${item.name || item.code}(${item.code}) predictedRank=${item.predictedRank ?? "-"} max=${item.bestMaxGainPct ?? "-"}% close=${item.bestCloseGainPct ?? "-"}% score=${item.outcomeScore ?? "-"} fit=${item.methodFit ?? "-"}`)
+      lines.push(`- ${item.rankByPlaybook}. ${item.name || item.code}(${item.code}) predictedRank=${item.predictedRank ?? "-"} max=${item.bestMaxGainPct ?? "-"}% close=${item.bestCloseGainPct ?? "-"}% score=${item.outcomeScore ?? "-"} fit=${item.methodFit ?? "-"} fullMarketD1Rank=${item.fullMarketDailyRank ?? "-"}`)
     }
     lines.push("")
   }
@@ -599,6 +655,7 @@ async function run(options = {}) {
   const projectPath = path.resolve(options.projectPath ?? DEFAULT_PROJECT_PATH)
   const asOfDate = normalizeTradeDate(options.asOfDate) ?? dateOnly()
   const latestDefaultEvaluableDate = previousTradingDate(asOfDate)
+  const marketStrength = loadMarketStrength(projectPath, asOfDate)
   const records = latestPredictionRecords(projectPath, {
     recordsLimit: Number(options.recordsLimit ?? 5),
     tradeDate: normalizeTradeDate(options.tradeDate),
@@ -609,7 +666,7 @@ async function run(options = {}) {
   })
   const reviews = []
   for (const record of records) {
-    reviews.push(await reviewPredictionRecord(projectPath, record, options))
+    reviews.push(await reviewPredictionRecord(projectPath, record, { ...options, marketStrength }))
   }
   const generatedAt = nowLocalTimestamp()
   const summary = {
@@ -628,6 +685,12 @@ async function run(options = {}) {
       byPlaybook: aggregateCounts(reviews, "byPlaybook"),
       byMethodFit: aggregateCounts(reviews, "byMethodFit"),
     },
+    marketStrength: marketStrength ? {
+      id: marketStrength.id,
+      evidenceTradeDate: marketStrength.evidenceTradeDate,
+      counts: marketStrength.counts,
+      rankingScope: marketStrength.rankingScope,
+    } : null,
     writePolicy: {
       rawWrite: false,
       wikiWrite: false,

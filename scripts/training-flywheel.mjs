@@ -11,6 +11,7 @@ const REPORT_ROOT = ".llm-wiki/training-flywheel"
 
 const STEPS = [
   { name: "market-regime", script: "market-regime.mjs" },
+  { name: "market-strength-rank", script: "market-strength-rank.mjs" },
   { name: "evidence-queue", script: "evidence-queue.mjs" },
   { name: "review-manifest", script: "review-manifest.mjs" },
   { name: "next-limitup-review", script: "next-limitup-review.mjs" },
