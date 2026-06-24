@@ -555,6 +555,16 @@ async function runCollector({ projectPath, label, profile, maxSymbols, force }) 
       projectPath,
       "--write",
     ], { allowFailure: true }))
+    steps.push(runStep("prediction:outcome", process.execPath, [
+      scriptPath("prediction-outcome-review.mjs"),
+      "--project",
+      projectPath,
+      "--records",
+      "5",
+      "--candidate-limit",
+      "30",
+      "--write",
+    ], { allowFailure: true }))
     steps.push(runStep("market:regime", process.execPath, [
       scriptPath("market-regime.mjs"),
       "--project",

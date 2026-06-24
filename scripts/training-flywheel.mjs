@@ -14,6 +14,7 @@ const STEPS = [
   { name: "evidence-queue", script: "evidence-queue.mjs" },
   { name: "review-manifest", script: "review-manifest.mjs" },
   { name: "next-limitup-review", script: "next-limitup-review.mjs" },
+  { name: "prediction-outcome-review", script: "prediction-outcome-review.mjs" },
   { name: "trading-trajectories", script: "trading-trajectories.mjs" },
   { name: "training-lora", script: "training-lora.mjs" },
   { name: "concept-pools", script: "concept-pools.mjs" },
