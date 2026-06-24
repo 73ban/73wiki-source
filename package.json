@@ -44,6 +44,7 @@
     "training:lora": "node scripts/training-lora.mjs --write",
     "training:trajectories": "node scripts/trading-trajectories.mjs --write",
     "training:flywheel": "node scripts/training-flywheel.mjs --write",
+    "training:raw-learning": "node scripts/raw-learning-flywheel.mjs --write",
     "next-limitup:review": "node scripts/next-limitup-review.mjs --write",
     "prediction:outcome": "node scripts/prediction-outcome-review.mjs --write",
     "score:feedback": "node scripts/score-feedback.mjs --write",

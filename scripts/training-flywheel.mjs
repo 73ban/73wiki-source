@@ -21,6 +21,7 @@ const STEPS = [
   { name: "prediction-outcome-review", script: "prediction-outcome-review.mjs" },
   { name: "score-feedback", script: "score-feedback.mjs" },
   { name: "trading-trajectories", script: "trading-trajectories.mjs" },
+  { name: "raw-learning-flywheel", script: "raw-learning-flywheel.mjs" },
   { name: "training-lora", script: "training-lora.mjs" },
   { name: "concept-pools", script: "concept-pools.mjs" },
   { name: "market-signal-dashboard", script: "market-signal-dashboard.mjs" },

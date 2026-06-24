@@ -123,6 +123,7 @@ function resolveCaptureFile({ captureFile, captureDir }) {
 }
 
 function normalizeRows(rows, maxItems) {
+  const seen = new Set()
   return (Array.isArray(rows) ? rows : [])
     .map((row, index) => {
       const code = normalizeCode(row?.code)
@@ -141,6 +142,12 @@ function normalizeRows(rows, maxItems) {
         amountText: String(row?.amount ?? "").trim(),
         raw: row?.raw ?? null,
       }
+    })
+    .filter((row) => {
+      if (!row) return false
+      if (seen.has(row.code)) return false
+      seen.add(row.code)
+      return true
     })
     .filter(Boolean)
     .slice(0, Number(maxItems))
