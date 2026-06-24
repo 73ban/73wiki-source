@@ -112,7 +112,7 @@ function buildRecord(projectPath, options = {}) {
   const llm = path.join(projectPath, ".llm-wiki")
   const thsPath = path.join(llm, "ths-hotlist", "latest-ths-hotlist.json")
   const tdxPath = path.join(llm, "tdx-hotlist", "latest-tdx-hotlist.json")
-  const ths = evaluateSource("ths-hotlist", readJsonMaybe(thsPath), statInfo(thsPath), Number(options.minThsRows ?? 80), Number(options.maxAgeHours ?? 24))
+  const ths = evaluateSource("ths-hotlist", readJsonMaybe(thsPath), statInfo(thsPath), Number(options.minThsRows ?? 20), Number(options.maxAgeHours ?? 24))
   const requireTdx = Boolean(options.requireTdx)
   const tdx = evaluateSource("tdx-hotlist", readJsonMaybe(tdxPath), statInfo(tdxPath), Number(options.minTdxRows ?? 0), Number(options.maxAgeHours ?? 48), {
     required: requireTdx,
@@ -183,7 +183,7 @@ function main() {
   }
   const result = run({
     projectPath: args.project ?? args._[0] ?? DEFAULT_PROJECT_PATH,
-    minThsRows: Number(args["min-ths-rows"] ?? 80),
+    minThsRows: Number(args["min-ths-rows"] ?? 20),
     minTdxRows: Number(args["min-tdx-rows"] ?? 0),
     maxAgeHours: Number(args["max-age-hours"] ?? 48),
     requireTdx: Boolean(args["require-tdx"]),
