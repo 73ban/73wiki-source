@@ -137,6 +137,13 @@ function maxNum(values) {
   return nums.length ? Math.max(...nums) : null
 }
 
+function round(value, digits = 2) {
+  const num = Number(value)
+  if (!Number.isFinite(num)) return null
+  const factor = 10 ** digits
+  return Math.round(num * factor) / factor
+}
+
 function readJsonl(filePath) {
   if (!fs.existsSync(filePath)) return []
   return fs.readFileSync(filePath, "utf8")
@@ -262,6 +269,94 @@ function classifyOutcome(metrics) {
   return { label: "uncertain", correct: false, reason: "Outcome is not strong enough yet or still needs more days." }
 }
 
+function preferredPlaybooksForRegime(marketRegime) {
+  const mode = marketRegime?.mode ?? "unknown"
+  if (mode === "attack") return ["limit_board", "overnight_arbitrage", "trend_leader"]
+  if (mode === "mixed") return ["trend_leader", "limit_board", "overnight_arbitrage"]
+  if (mode === "selective") return ["trend_leader", "swing_profit"]
+  if (mode === "defensive") return ["swing_profit", "trend_leader"]
+  return ["trend_leader", "limit_board", "overnight_arbitrage", "swing_profit"]
+}
+
+function buildPlaybook(metrics, outcome, marketRegime) {
+  if (!metrics.available) {
+    return {
+      label: "data_gap",
+      methodFit: "unknown",
+      preferredForRegime: false,
+      reason: "No quote data for method validation.",
+      scores: {},
+    }
+  }
+  const d1 = metrics.checkpoints.D1 ?? {}
+  const d3 = metrics.checkpoints.D3 ?? {}
+  const d5 = metrics.checkpoints.D5 ?? {}
+  const bestMax = maxNum([d1.maxGainPct, d3.maxGainPct, d5.maxGainPct]) ?? 0
+  const bestClose = maxNum([d1.closeGainPct, d3.closeGainPct, d5.closeGainPct]) ?? 0
+  const worstDrawdown = maxNum([d1.minDrawdownPct, d3.minDrawdownPct, d5.minDrawdownPct]) ?? 0
+  const limitLikeDays = [d1, d3, d5].reduce((sum, item) => sum + Number(item?.limitLikeDays ?? 0), 0)
+  const limitBoardScore = round(limitLikeDays * 45 + Math.max(0, bestMax - 8) * 3 + Math.max(0, d1.closeGainPct ?? 0) * 1.2 - Math.max(0, worstDrawdown) * 1.5)
+  const overnightScore = round(Math.max(0, d1.maxGainPct ?? 0) * 6 + Math.max(0, d1.closeGainPct ?? 0) * 4 - Math.max(0, d1.minDrawdownPct ?? 0) * 2)
+  const trendScore = round(Math.max(0, d3.maxGainPct ?? 0) * 3.2 + Math.max(0, d5.maxGainPct ?? 0) * 3.8 + Math.max(0, bestClose) * 2 - Math.max(0, worstDrawdown) * 1.6)
+  const swingScore = round(Math.max(0, bestMax) * 2 + Math.max(0, bestClose) * 1.6 - Math.max(0, worstDrawdown) * 1.2)
+  let label = "failed_or_unclear"
+  let reason = outcome.reason
+  if (outcome.label === "trend_big_win" || outcome.label === "trend_win") {
+    label = "trend_leader"
+    reason = "Multi-day return is the main edge; validate as a trend-strength candidate."
+  } else if (outcome.label === "limit_or_near_limit_success") {
+    label = "limit_board"
+    reason = "Limit-up or near-limit strength is the main edge."
+  } else if (outcome.label === "next_day_big_up") {
+    label = "overnight_arbitrage"
+    reason = "Next-day impulse was tradable even without multi-day confirmation."
+  } else if (outcome.label === "small_profit") {
+    label = "swing_profit"
+    reason = "The setup produced money but not a top leader; validate as secondary swing profit."
+  } else if (outcome.label === "uncertain") {
+    label = "pending_confirmation"
+  }
+  const preferred = preferredPlaybooksForRegime(marketRegime)
+  const preferredForRegime = preferred.includes(label)
+  return {
+    label,
+    methodFit: preferredForRegime ? "regime_matched" : "regime_mismatch_or_secondary",
+    preferredForRegime,
+    preferredPlaybooks: preferred,
+    reason,
+    scores: {
+      limitBoardScore,
+      overnightScore,
+      trendScore,
+      swingScore,
+    },
+  }
+}
+
+function buildOutcomeScore(item) {
+  const d1 = item.metrics.checkpoints?.D1 ?? {}
+  const d3 = item.metrics.checkpoints?.D3 ?? {}
+  const d5 = item.metrics.checkpoints?.D5 ?? {}
+  const bestMax = Number(item.bestMaxGainPct ?? 0)
+  const bestClose = Number(item.bestCloseGainPct ?? 0)
+  const drawdown = maxNum([d1.minDrawdownPct, d3.minDrawdownPct, d5.minDrawdownPct]) ?? 0
+  const playbookScores = item.playbook?.scores ?? {}
+  const leaderBonus = item.playbook?.label === "trend_leader" ? 18 : item.playbook?.label === "limit_board" ? 14 : item.playbook?.label === "overnight_arbitrage" ? 10 : 0
+  const fitBonus = item.playbook?.preferredForRegime ? 8 : 0
+  const score = bestMax * 3 + bestClose * 1.6 - Math.max(0, drawdown) * 1.8 + leaderBonus + fitBonus + Math.max(0, Number(playbookScores.trendScore ?? 0), Number(playbookScores.limitBoardScore ?? 0), Number(playbookScores.overnightScore ?? 0)) * 0.08
+  return round(score)
+}
+
+function aggregateCounts(reviews, field) {
+  const out = {}
+  for (const review of reviews) {
+    for (const [key, value] of Object.entries(review.counts?.[field] ?? {})) {
+      out[key] = (out[key] ?? 0) + Number(value ?? 0)
+    }
+  }
+  return out
+}
+
 function buildSample(record, item) {
   return {
     schema: "73wiki-prediction-outcome-sample-v1",
@@ -276,18 +371,28 @@ function buildSample(record, item) {
       themes: item.themes,
       reasons: item.reasons,
       marketRegime: item.marketRegime,
+      playbook: item.playbook,
+      ranks: {
+        predictedRank: item.rank,
+        outcomeRank: item.rankByOutcome ?? null,
+        playbookRank: item.rankByPlaybook ?? null,
+      },
       outcomeMetrics: item.metrics,
     },
     output: {
       label: item.outcome.label,
+      playbook: item.playbook?.label ?? null,
+      methodFit: item.playbook?.methodFit ?? null,
       correct: item.outcome.correct,
       lesson: item.lesson,
     },
     label: {
       result: item.outcome.label,
+      playbook: item.playbook?.label ?? null,
       correct: item.outcome.correct,
       bestMaxGainPct: item.bestMaxGainPct,
       bestCloseGainPct: item.bestCloseGainPct,
+      outcomeScore: item.outcomeScore ?? null,
     },
     metadata: {
       createdAt: nowLocalTimestamp(),
@@ -297,6 +402,10 @@ function buildSample(record, item) {
 }
 
 function lessonFor(item) {
+  if (item.playbook?.label === "trend_leader") return "Trend行情要看区间收益排名；没有次日涨停但3/5日成为最强区间股，也应提高相似模式权重。"
+  if (item.playbook?.label === "limit_board") return "连板或强封板行情要保留涨停强度、封板质量、题材共振等特征。"
+  if (item.playbook?.label === "overnight_arbitrage") return "隔日套利要重视次日冲高和收盘强度，不要求后续持续趋势。"
+  if (item.playbook?.label === "swing_profit") return "该信号可赚钱但不是主升核心，只能作为次级套利或观察样本。"
   if (item.outcome.label === "trend_big_win") return "Treat this as a top trend-winner pattern; raise weights for similar multi-day continuation setups."
   if (item.outcome.label === "trend_win") return "The prediction was right as a trend trade; do not punish it for lacking a next-day limit-up."
   if (item.outcome.label === "next_day_big_up") return "The catalyst translated quickly into profit; keep next-day strength features."
@@ -323,6 +432,8 @@ async function reviewPredictionRecord(projectPath, predictionRecord, options = {
     const d5 = metrics.checkpoints?.D5 ?? {}
     const bestMaxGainPct = maxNum([d1.maxGainPct, d3.maxGainPct, d5.maxGainPct])
     const bestCloseGainPct = maxNum([d1.closeGainPct, d3.closeGainPct, d5.closeGainPct])
+    const marketRegime = candidate.marketRegime ?? null
+    const playbook = buildPlaybook(metrics, outcome, marketRegime)
     const item = {
       code,
       name: candidate.name ?? "",
@@ -332,24 +443,50 @@ async function reviewPredictionRecord(projectPath, predictionRecord, options = {
       themes: candidate.themes ?? [],
       reasons: candidate.reasons ?? [],
       sourceTags: candidate.sourceTags ?? [],
-      marketRegime: candidate.marketRegime ?? null,
+      marketRegime,
       metrics,
       outcome,
+      playbook,
       bestMaxGainPct,
       bestCloseGainPct,
     }
+    item.outcomeScore = buildOutcomeScore(item)
     item.lesson = lessonFor(item)
     items.push(item)
   }
+  const outcomeRanked = [...items]
+    .filter((item) => item.bestMaxGainPct != null)
+    .sort((a, b) => Number(b.outcomeScore ?? -Infinity) - Number(a.outcomeScore ?? -Infinity) || Number(b.bestMaxGainPct ?? -Infinity) - Number(a.bestMaxGainPct ?? -Infinity))
+  outcomeRanked.forEach((item, index) => {
+    item.rankByOutcome = index + 1
+  })
+  const playbookRanked = new Map()
+  for (const label of unique(items.map((item) => item.playbook?.label))) {
+    const ranked = items
+      .filter((item) => item.playbook?.label === label)
+      .sort((a, b) => Number(b.outcomeScore ?? -Infinity) - Number(a.outcomeScore ?? -Infinity) || Number(b.bestMaxGainPct ?? -Infinity) - Number(a.bestMaxGainPct ?? -Infinity))
+    ranked.forEach((item, index) => playbookRanked.set(`${label}:${item.code}`, index + 1))
+  }
+  for (const item of items) item.rankByPlaybook = playbookRanked.get(`${item.playbook?.label}:${item.code}`) ?? null
   const evaluable = items.filter((item) => !["data_gap"].includes(item.outcome.label))
   const correct = evaluable.filter((item) => item.outcome.correct)
   const byLabel = items.reduce((acc, item) => {
     acc[item.outcome.label] = (acc[item.outcome.label] ?? 0) + 1
     return acc
   }, {})
+  const byPlaybook = items.reduce((acc, item) => {
+    const label = item.playbook?.label ?? "unknown"
+    acc[label] = (acc[label] ?? 0) + 1
+    return acc
+  }, {})
+  const byMethodFit = items.reduce((acc, item) => {
+    const label = item.playbook?.methodFit ?? "unknown"
+    acc[label] = (acc[label] ?? 0) + 1
+    return acc
+  }, {})
   const trendLeaders = [...items]
     .filter((item) => item.bestMaxGainPct != null)
-    .sort((a, b) => Number(b.bestMaxGainPct ?? -Infinity) - Number(a.bestMaxGainPct ?? -Infinity))
+    .sort((a, b) => Number(b.outcomeScore ?? -Infinity) - Number(a.outcomeScore ?? -Infinity) || Number(b.bestMaxGainPct ?? -Infinity) - Number(a.bestMaxGainPct ?? -Infinity))
     .slice(0, 10)
     .map((item, index) => ({
       rankByOutcome: index + 1,
@@ -358,9 +495,30 @@ async function reviewPredictionRecord(projectPath, predictionRecord, options = {
       predictedRank: item.rank,
       bestMaxGainPct: item.bestMaxGainPct,
       bestCloseGainPct: item.bestCloseGainPct,
+      outcomeScore: item.outcomeScore,
       label: item.outcome.label,
+      playbook: item.playbook?.label ?? null,
+      methodFit: item.playbook?.methodFit ?? null,
       themes: item.themes.slice(0, 8),
     }))
+  const playbookLeaders = Object.fromEntries(["trend_leader", "limit_board", "overnight_arbitrage", "swing_profit"].map((label) => [
+    label,
+    items
+      .filter((item) => item.playbook?.label === label)
+      .sort((a, b) => Number(b.outcomeScore ?? -Infinity) - Number(a.outcomeScore ?? -Infinity) || Number(b.bestMaxGainPct ?? -Infinity) - Number(a.bestMaxGainPct ?? -Infinity))
+      .slice(0, 5)
+      .map((item) => ({
+        rankByPlaybook: item.rankByPlaybook,
+        code: item.code,
+        name: item.name,
+        predictedRank: item.rank,
+        bestMaxGainPct: item.bestMaxGainPct,
+        bestCloseGainPct: item.bestCloseGainPct,
+        outcomeScore: item.outcomeScore,
+        label: item.outcome.label,
+        methodFit: item.playbook?.methodFit ?? null,
+      })),
+  ]))
   return {
     schema: "73wiki-prediction-outcome-review-v1",
     id: `prediction_outcome_${tradeDate.replace(/-/g, "")}_${idTimestamp()}_${shortHash(predictionRecord.id)}`,
@@ -376,8 +534,15 @@ async function reviewPredictionRecord(projectPath, predictionRecord, options = {
       correct: correct.length,
       moneyHitRate: evaluable.length ? Number((correct.length / evaluable.length).toFixed(4)) : 0,
       byLabel,
+      byPlaybook,
+      byMethodFit,
     },
     trendLeaders,
+    playbookLeaders,
+    rankingScope: {
+      type: "prediction_pool",
+      note: "Ranks compare candidates in the prediction record. Full-market rank requires a complete all-A-share daily return snapshot.",
+    },
     items,
     writePolicy: {
       rawWrite: false,
@@ -403,18 +568,30 @@ function markdown(record) {
     `- Correct money outcomes: ${record.counts.correct}`,
     `- Money hit rate: ${record.counts.moneyHitRate}`,
     `- Labels: ${Object.entries(record.counts.byLabel).map(([key, value]) => `${key}=${value}`).join(", ")}`,
+    `- Playbooks: ${Object.entries(record.counts.byPlaybook ?? {}).map(([key, value]) => `${key}=${value}`).join(", ")}`,
+    `- Method fit: ${Object.entries(record.counts.byMethodFit ?? {}).map(([key, value]) => `${key}=${value}`).join(", ")}`,
+    `- Ranking scope: ${record.rankingScope?.type ?? "prediction_pool"}; ${record.rankingScope?.note ?? ""}`,
     "",
-    "## Trend Leaders",
+    "## Strongest Outcome Leaders",
     "",
   ]
   for (const item of record.trendLeaders) {
-    lines.push(`- ${item.rankByOutcome}. ${item.name || item.code}(${item.code}) predictedRank=${item.predictedRank ?? "-"} max=${item.bestMaxGainPct ?? "-"}% close=${item.bestCloseGainPct ?? "-"}% label=${item.label}`)
+    lines.push(`- ${item.rankByOutcome}. ${item.name || item.code}(${item.code}) predictedRank=${item.predictedRank ?? "-"} max=${item.bestMaxGainPct ?? "-"}% close=${item.bestCloseGainPct ?? "-"}% score=${item.outcomeScore ?? "-"} label=${item.label} playbook=${item.playbook ?? "-"}`)
+  }
+  lines.push("", "## Method Leaders", "")
+  for (const [label, leaders] of Object.entries(record.playbookLeaders ?? {})) {
+    if (!leaders.length) continue
+    lines.push(`### ${label}`)
+    for (const item of leaders) {
+      lines.push(`- ${item.rankByPlaybook}. ${item.name || item.code}(${item.code}) predictedRank=${item.predictedRank ?? "-"} max=${item.bestMaxGainPct ?? "-"}% close=${item.bestCloseGainPct ?? "-"}% score=${item.outcomeScore ?? "-"} fit=${item.methodFit ?? "-"}`)
+    }
+    lines.push("")
   }
   lines.push("", "## Failed / Uncertain")
   for (const item of record.items.filter((row) => ["failed", "uncertain"].includes(row.outcome.label)).slice(0, 15)) {
-    lines.push(`- ${item.name || item.code}(${item.code}) predictedRank=${item.rank ?? "-"} max=${item.bestMaxGainPct ?? "-"}% close=${item.bestCloseGainPct ?? "-"}% reason=${item.outcome.reason}`)
+    lines.push(`- ${item.name || item.code}(${item.code}) predictedRank=${item.rank ?? "-"} max=${item.bestMaxGainPct ?? "-"}% close=${item.bestCloseGainPct ?? "-"}% playbook=${item.playbook?.label ?? "-"} reason=${item.outcome.reason}`)
   }
-  lines.push("", "This review scores real profit outcomes, not just next-day limit-ups. It is not buy advice.")
+  lines.push("", "This review scores real profit outcomes across limit-board, trend, overnight-arbitrage, and swing playbooks. It is not buy advice.")
   return `${lines.join("\n").trim()}\n`
 }
 
@@ -448,6 +625,8 @@ async function run(options = {}) {
       candidates: reviews.reduce((sum, item) => sum + item.counts.candidates, 0),
       evaluable: reviews.reduce((sum, item) => sum + item.counts.evaluable, 0),
       correct: reviews.reduce((sum, item) => sum + item.counts.correct, 0),
+      byPlaybook: aggregateCounts(reviews, "byPlaybook"),
+      byMethodFit: aggregateCounts(reviews, "byMethodFit"),
     },
     writePolicy: {
       rawWrite: false,
@@ -485,7 +664,7 @@ async function run(options = {}) {
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) {
-    console.log("Usage: node scripts/prediction-outcome-review.mjs --project C:/wiki/73绁炶瘽 --records 5 --candidate-limit 30 --write")
+    console.log("Usage: node scripts/prediction-outcome-review.mjs --project <wiki-root> --records 5 --candidate-limit 30 --write")
     return
   }
   const result = await run({
@@ -508,6 +687,8 @@ async function main() {
       evaluable: result.record.counts.evaluable,
       correct: result.record.counts.correct,
       moneyHitRate: result.record.counts.moneyHitRate,
+      byPlaybook: result.record.counts.byPlaybook,
+      byMethodFit: result.record.counts.byMethodFit,
       written: result.written ?? null,
     }, null, 2))
   }
