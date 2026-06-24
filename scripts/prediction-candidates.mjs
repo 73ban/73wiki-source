@@ -287,6 +287,8 @@ function cleanName(value) {
   if (!name) return ""
   if (/^(图片|截图|image)\s*\d+$/i.test(name)) return ""
   if (/^[*+=_#@!~`^|\\/-]+$/.test(name)) return ""
+  if (/^[A-Za-z][\u4e00-\u9fff]{1,3}$/.test(name) && !/^[NCU]/i.test(name)) return ""
+  if (/^[A-Za-z]{2}[\u4e00-\u9fff]{1,3}$/.test(name) && !/^(ST|XD)/i.test(name)) return ""
   return name
 }
 
@@ -370,6 +372,8 @@ function extractName(content, code, index) {
 function isLikelyStockName(name) {
   const text = String(name ?? "").trim()
   if (!text) return false
+  if (/^[A-Za-z][\u4e00-\u9fff]{1,3}$/.test(text) && !/^[NCU]/i.test(text)) return false
+  if (/^[A-Za-z]{2}[\u4e00-\u9fff]{1,3}$/.test(text) && !/^(ST|XD)/i.test(text)) return false
   if (text.length < 2 || text.length > 8) return false
   if (/合作|精要|本本|新村|来源|公告|解读|盘中宝|风口|公司具备|深度|正文|资料|摘要/.test(text)) return false
   if (/^[A-Za-z0-9*]+$/.test(text)) return false

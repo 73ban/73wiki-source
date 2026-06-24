@@ -214,6 +214,8 @@ function cleanName(value) {
   if (!name) return ""
   if (/^(图片|截图|image)\s*\d+$/i.test(name)) return ""
   if (/^[*+=_#@!~`^|\\/-]+$/.test(name)) return ""
+  if (/^[A-Za-z][\u4e00-\u9fff]{1,3}$/.test(name) && !/^[NCU]/i.test(name)) return ""
+  if (/^[A-Za-z]{2}[\u4e00-\u9fff]{1,3}$/.test(name) && !/^(ST|XD)/i.test(name)) return ""
   return name
 }
 
