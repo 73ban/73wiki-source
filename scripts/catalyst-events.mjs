@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { mergeHotFiles, readHotFiles } from "./raw-hot-files.mjs"
+import { sanitizeList } from "./signal-quality.mjs"
 
 const DEFAULT_PROJECT_PATH = process.env.WIKI_PROJECT_PATH ?? "C:/wiki/73神话"
 const FACT_PATH = "data/facts/catalyst_events.jsonl"
@@ -552,7 +553,7 @@ function buildLinks({ event, block, stockUniverse }) {
       name,
       linkType: "direct_mention",
       relationStrength: Math.min(100, event.catalystScore + 20 + (strongCodeContext ? 8 : -10)),
-      reasons: ["????????????", event.title],
+      reasons: sanitizeList(["direct code mention", event.title], 3),
       themes,
       sourceTags: [event.source],
       evidenceFiles: [event.sourcePath],
@@ -578,7 +579,7 @@ function buildLinks({ event, block, stockUniverse }) {
       name: old?.name || stock.name,
       linkType: directName ? "name_mention" : "theme_match",
       relationStrength: Math.max(old?.relationStrength ?? 0, strength),
-      reasons: unique([...(old?.reasons ?? []), directName ? "??????????" : ("???????" + themeMatches.join("?")), event.title]),
+      reasons: sanitizeList([...(old?.reasons ?? []), directName ? "direct name mention" : `theme match: ${themeMatches.join("/")}`, event.title], 6),
       themes: unique([...(old?.themes ?? []), ...themeMatches, ...(directName ? event.themes.slice(0, 2) : [])]),
       sourceTags: unique([...(old?.sourceTags ?? []), event.source, ...(stock.sourceTags ?? [])]),
       evidenceFiles: unique([...(old?.evidenceFiles ?? []), event.sourcePath]),
@@ -713,7 +714,7 @@ function buildRecord({ projectPath, sinceDays, sourceLimit, maxEvents, tradeDate
       name: link.name,
       linkType: link.linkType,
       relationStrength: link.relationStrength,
-      reasons: link.reasons,
+      reasons: sanitizeList(link.reasons, 8),
       themes: link.themes,
       sourceTags: link.sourceTags,
       evidenceFiles: link.evidenceFiles,
@@ -728,7 +729,7 @@ function buildRecord({ projectPath, sinceDays, sourceLimit, maxEvents, tradeDate
     name: link.name,
     relationStrength: link.relationStrength,
     themes: link.themes.slice(0, 6),
-    reasons: link.reasons.slice(0, 3),
+    reasons: sanitizeList(link.reasons, 3),
   }))
   const topRiskLinks = links.filter((link) => link.status === "risk").slice(0, 10).map((link) => ({
     code: link.code,

@@ -210,10 +210,15 @@ function buildAudit(projectPath) {
     marketRegime: statInfo(path.join(llmRoot, "market-regime", "latest-market-regime.json")),
     marketStrengthRank: statInfo(path.join(llmRoot, "market-strength-rank", "latest-market-strength-rank.json")),
     marketFocusUniverse: statInfo(path.join(llmRoot, "market-focus-universe", "latest-market-focus-universe.json")),
+    focusTrendValidation: statInfo(path.join(llmRoot, "focus-trend-validation", "latest-focus-trend-validation.json")),
     predictionOutcomeReview: statInfo(path.join(llmRoot, "prediction-outcome-review", "latest-prediction-outcome-review.json")),
+    scoreFeedback: statInfo(path.join(llmRoot, "score-feedback", "latest-score-feedback.json")),
+    hotlistHealth: statInfo(path.join(llmRoot, "hotlist-health", "latest-hotlist-health.json")),
+    marketSignalDashboard: statInfo(path.join(llmRoot, "market-signal-dashboard", "latest-market-signal-dashboard.json")),
     marketCollect: statInfo(path.join(llmRoot, "market-collect", "latest-market-collect.json")),
     thsHotlist: statInfo(path.join(llmRoot, "ths-hotlist", "latest-ths-hotlist.json")),
   }
+  const hotlistHealthRecord = readJsonMaybe(path.join(llmRoot, "hotlist-health", "latest-hotlist-health.json"))
 
   const queuePath = path.join(systemRoot, "codex-raw-watch-queue.jsonl")
   const registryPath = path.join(systemRoot, "ingest-registry.jsonl")
@@ -252,7 +257,8 @@ function buildAudit(projectPath) {
   if (wrongProjectPathTasks.length > 0) issues.push(`${wrongProjectPathTasks.length} scheduled task(s) still write to mojibake project path`)
   if (!rawWatchTask?.NextRunTime) issues.push("RAW watcher has no next run time")
   if (!rawConsumerTask?.NextRunTime) issues.push("RAW consumer has no next run time")
-  if (unresolvedPendingQueue.length > 0) issues.push(`${unresolvedPendingQueue.length} unresolved RAW queue item(s) are still pending_codex_ingest`)
+  if (unresolvedPendingQueue.length > 80) issues.push(`${unresolvedPendingQueue.length} unresolved RAW queue item(s) are still pending_codex_ingest`)
+  else if (unresolvedPendingQueue.length > 0) warnings.push(`${unresolvedPendingQueue.length} fresh RAW queue item(s) are waiting for the next consumer run`)
   if (queuedTodayFiles.length === 0 && (latestRawTrade?.path?.includes(today) || latestRawReview?.path?.includes(today))) issues.push("today RAW files exist but are not in RAW watch queue")
   if (latestRawTrade && keyWikiFiles.every((item) => !item.exists || Date.parse(item.mtime) < latestRawTrade.mtimeMs)) issues.push("latest trade ticket is newer than core wiki pages")
   if (latestRawReview && keyWikiFiles.every((item) => !item.exists || Date.parse(item.mtime) < latestRawReview.mtimeMs)) issues.push("latest daily review is newer than core wiki pages")
@@ -267,7 +273,12 @@ function buildAudit(projectPath) {
   if (!artifacts.marketRegime.exists) warnings.push("market regime report is missing")
   if (!artifacts.marketStrengthRank.exists) warnings.push("market strength rank report is missing")
   if (!artifacts.marketFocusUniverse.exists) warnings.push("market focus universe report is missing")
+  if (!artifacts.focusTrendValidation.exists) warnings.push("focus trend validation report is missing")
   if (!artifacts.predictionOutcomeReview.exists) warnings.push("prediction outcome review is missing")
+  if (!artifacts.scoreFeedback.exists) warnings.push("score feedback report is missing")
+  if (!artifacts.hotlistHealth.exists) warnings.push("hotlist health report is missing")
+  if (!artifacts.marketSignalDashboard.exists) warnings.push("market signal dashboard is missing")
+  if (hotlistHealthRecord?.warnings?.length) warnings.push(...hotlistHealthRecord.warnings.map((item) => `hotlist health: ${item}`))
 
   return {
     schema: "73wiki-pipeline-audit-v1",

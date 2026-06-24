@@ -21,6 +21,12 @@ const FACT_FILES = [
   "data/facts/minute_bar_snapshots.jsonl",
   "data/facts/warroom_watchlists.jsonl",
   "data/facts/limit_up_reasons.jsonl",
+  "data/facts/market_strength_ranks.jsonl",
+  "data/facts/market_focus_universe.jsonl",
+  "data/facts/focus_trend_validations.jsonl",
+  "data/facts/prediction_outcome_reviews.jsonl",
+  "data/facts/score_feedback.jsonl",
+  "data/facts/hotlist_health.jsonl",
   "data/facts/market_snapshots.jsonl",
   "data/facts/shortline_emotion_snapshots.jsonl",
   "data/facts/tdx_mcp_snapshots.jsonl",
@@ -92,10 +98,30 @@ function codeBase(value) {
   return String(value ?? "").replace(/\.(SH|SZ|BJ)$/i, "")
 }
 
-function readJsonl(filePath) {
+function parseCliArgs(argv) {
+  const args = { _: [], all: false, recentRecords: Number(process.env.WIKI73_IMPORT_RECENT_RECORDS ?? 25) }
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]
+    if (token === "--all") {
+      args.all = true
+      continue
+    }
+    if (token === "--recent-records") {
+      args.recentRecords = Number(argv[index + 1] ?? args.recentRecords)
+      index += 1
+      continue
+    }
+    if (!token.startsWith("--")) args._.push(token)
+  }
+  return args
+}
+
+function readJsonl(filePath, { all = false, recentRecords = 25 } = {}) {
   if (!fs.existsSync(filePath)) return []
   const raw = fs.readFileSync(filePath, "utf8")
-  return raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line))
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const selected = all ? lines : lines.slice(-Math.max(1, Number(recentRecords)))
+  return selected.map((line) => JSON.parse(line))
 }
 
 function batchSql(record, { scope }) {
@@ -504,6 +530,191 @@ on conflict (validation_id, code) do update set
   return sql.join("\n")
 }
 
+function marketStrengthRankSql(record) {
+  const sql = [`
+insert into trading.market_strength_ranks
+  (id, generated_at, evidence_trade_date, status, counts, raw)
+values
+  (${lit(record.id)}, ${tsLit(record.generatedAt)}, ${dateLit(record.evidenceTradeDate ?? record.generatedAt)}, ${lit(record.status ?? "active")}, ${jsonLit(record.counts)}, ${jsonLit(record)})
+on conflict (id) do update set
+  counts = excluded.counts,
+  raw = excluded.raw;
+`]
+  for (const item of record.rows ?? []) {
+    const code = codeBase(item.code)
+    if (!code) continue
+    sql.push(`
+${instrumentSql({ code, name: item.name })}
+insert into trading.market_strength_rank_items
+  (id, rank_id, evidence_trade_date, code, name, full_market_daily_rank, amount_rank, change_percent, amount, turnover_rate, raw)
+values
+  (${lit(`${record.id}_${code}`)}, ${lit(record.id)}, ${dateLit(record.evidenceTradeDate ?? record.generatedAt)}, ${lit(code)}, ${lit(item.name)}, ${intNum(item.fullMarketDailyRank)}, ${intNum(item.amountRank)}, ${num(item.changePercent)}, ${num(item.amount)}, ${num(item.turnoverRate)}, ${jsonLit(item)})
+on conflict (rank_id, code) do update set
+  name = excluded.name,
+  full_market_daily_rank = excluded.full_market_daily_rank,
+  amount_rank = excluded.amount_rank,
+  change_percent = excluded.change_percent,
+  amount = excluded.amount,
+  turnover_rate = excluded.turnover_rate,
+  raw = excluded.raw;
+`)
+  }
+  return sql.join("\n")
+}
+
+function marketFocusUniverseSql(record) {
+  const sql = [`
+insert into trading.market_focus_universes
+  (id, generated_at, evidence_trade_date, status, market_regime, counts, raw)
+values
+  (${lit(record.id)}, ${tsLit(record.generatedAt)}, ${dateLit(record.evidenceTradeDate ?? record.generatedAt)}, ${lit(record.status ?? "active")}, ${jsonLit(record.marketRegime)}, ${jsonLit(record.counts)}, ${jsonLit(record)})
+on conflict (id) do update set
+  market_regime = excluded.market_regime,
+  counts = excluded.counts,
+  raw = excluded.raw;
+`]
+  for (const item of record.items ?? []) {
+    const code = codeBase(item.code)
+    if (!code) continue
+    sql.push(`
+${instrumentSql({ code, name: item.name })}
+insert into trading.market_focus_universe_items
+  (id, universe_id, evidence_trade_date, focus_rank, code, name, role, score, sources, themes, reasons, raw)
+values
+  (${lit(`${record.id}_${code}`)}, ${lit(record.id)}, ${dateLit(record.evidenceTradeDate ?? record.generatedAt)}, ${intNum(item.focusRank)}, ${lit(code)}, ${lit(item.name)}, ${lit(item.role)}, ${num(item.score)}, ${arrayLit(item.sources)}, ${arrayLit(item.themes)}, ${arrayLit(item.reasons)}, ${jsonLit(item)})
+on conflict (universe_id, code) do update set
+  focus_rank = excluded.focus_rank,
+  role = excluded.role,
+  score = excluded.score,
+  sources = excluded.sources,
+  themes = excluded.themes,
+  reasons = excluded.reasons,
+  raw = excluded.raw;
+`)
+  }
+  return sql.join("\n")
+}
+
+function focusTrendValidationSql(record) {
+  const sql = [`
+insert into trading.focus_trend_validations
+  (id, generated_at, evidence_trade_date, as_of_date, source_focus_universe_id, status, counts, raw)
+values
+  (${lit(record.id)}, ${tsLit(record.generatedAt)}, ${dateLit(record.evidenceTradeDate)}, ${dateLit(record.asOfDate)}, ${lit(record.sourceFocusUniverseId)}, ${lit(record.status ?? "active")}, ${jsonLit(record.counts)}, ${jsonLit(record)})
+on conflict (id) do update set
+  counts = excluded.counts,
+  raw = excluded.raw;
+`]
+  for (const item of record.items ?? []) {
+    const code = codeBase(item.code)
+    if (!code) continue
+    sql.push(`
+${instrumentSql({ code, name: item.name })}
+insert into trading.focus_trend_validation_items
+  (id, validation_id, evidence_trade_date, as_of_date, code, name, focus_rank, focus_role, interval_strength_rank, interval_close_rank, best_max_gain_pct, best_close_gain_pct, label, raw)
+values
+  (${lit(`${record.id}_${code}`)}, ${lit(record.id)}, ${dateLit(record.evidenceTradeDate)}, ${dateLit(record.asOfDate)}, ${lit(code)}, ${lit(item.name)}, ${intNum(item.focusRank)}, ${lit(item.focusRole)}, ${intNum(item.intervalStrengthRank)}, ${intNum(item.intervalCloseRank)}, ${num(item.bestMaxGainPct)}, ${num(item.bestCloseGainPct)}, ${lit(item.label)}, ${jsonLit(item)})
+on conflict (validation_id, code) do update set
+  focus_rank = excluded.focus_rank,
+  focus_role = excluded.focus_role,
+  interval_strength_rank = excluded.interval_strength_rank,
+  interval_close_rank = excluded.interval_close_rank,
+  best_max_gain_pct = excluded.best_max_gain_pct,
+  best_close_gain_pct = excluded.best_close_gain_pct,
+  label = excluded.label,
+  raw = excluded.raw;
+`)
+  }
+  return sql.join("\n")
+}
+
+function predictionOutcomeReviewSql(record) {
+  const sql = [`
+insert into trading.prediction_outcome_reviews
+  (id, generated_at, prediction_trade_date, as_of_date, prediction_record_id, status, counts, raw)
+values
+  (${lit(record.id)}, ${tsLit(record.generatedAt)}, ${dateLit(record.predictionTradeDate)}, ${dateLit(record.asOfDate)}, ${lit(record.predictionRecordId)}, ${lit(record.status ?? "active")}, ${jsonLit(record.counts)}, ${jsonLit(record)})
+on conflict (id) do update set
+  counts = excluded.counts,
+  raw = excluded.raw;
+`]
+  for (const item of record.items ?? []) {
+    const code = codeBase(item.code)
+    if (!code) continue
+    sql.push(`
+${instrumentSql({ code, name: item.name })}
+insert into trading.prediction_outcome_review_items
+  (id, review_id, prediction_trade_date, as_of_date, code, name, predicted_rank, rank_by_outcome, rank_by_playbook, outcome_label, playbook, method_fit, correct, best_max_gain_pct, best_close_gain_pct, outcome_score, focus_rank, focus_role, raw)
+values
+  (${lit(`${record.id}_${code}`)}, ${lit(record.id)}, ${dateLit(record.predictionTradeDate)}, ${dateLit(record.asOfDate)}, ${lit(code)}, ${lit(item.name)}, ${intNum(item.rank)}, ${intNum(item.rankByOutcome)}, ${intNum(item.rankByPlaybook)}, ${lit(item.outcome?.label)}, ${lit(item.playbook?.label)}, ${lit(item.playbook?.methodFit)}, ${item.outcome?.correct ? "true" : "false"}, ${num(item.bestMaxGainPct)}, ${num(item.bestCloseGainPct)}, ${num(item.outcomeScore)}, ${intNum(item.focusUniverse?.focusRank)}, ${lit(item.focusUniverse?.role)}, ${jsonLit(item)})
+on conflict (review_id, code) do update set
+  predicted_rank = excluded.predicted_rank,
+  rank_by_outcome = excluded.rank_by_outcome,
+  rank_by_playbook = excluded.rank_by_playbook,
+  outcome_label = excluded.outcome_label,
+  playbook = excluded.playbook,
+  method_fit = excluded.method_fit,
+  correct = excluded.correct,
+  best_max_gain_pct = excluded.best_max_gain_pct,
+  best_close_gain_pct = excluded.best_close_gain_pct,
+  outcome_score = excluded.outcome_score,
+  focus_rank = excluded.focus_rank,
+  focus_role = excluded.focus_role,
+  raw = excluded.raw;
+`)
+  }
+  return sql.join("\n")
+}
+
+function scoreFeedbackSql(record) {
+  const sql = [`
+insert into trading.score_feedback_runs
+  (id, generated_at, status, counts, raw)
+values
+  (${lit(record.id)}, ${tsLit(record.generatedAt)}, ${lit(record.status ?? "active")}, ${jsonLit(record.counts)}, ${jsonLit(record)})
+on conflict (id) do update set counts = excluded.counts, raw = excluded.raw;
+`]
+  for (const rule of record.rules ?? []) {
+    const id = `${record.id}_${createSqlHash(`${rule.type}:${rule.key}`)}`
+    sql.push(`
+insert into trading.score_feedback_rules
+  (id, run_id, rule_type, rule_key, action, score_delta, hit_rate, avg_best_max_gain_pct, samples, raw)
+values
+  (${lit(id)}, ${lit(record.id)}, ${lit(rule.type)}, ${lit(rule.key)}, ${lit(rule.action)}, ${num(rule.scoreDelta)}, ${num(rule.hitRate)}, ${num(rule.avgBestMaxGainPct)}, ${intNum(rule.evaluable ?? rule.samples)}, ${jsonLit(rule)})
+on conflict (run_id, rule_type, rule_key) do update set
+  action = excluded.action,
+  score_delta = excluded.score_delta,
+  hit_rate = excluded.hit_rate,
+  avg_best_max_gain_pct = excluded.avg_best_max_gain_pct,
+  samples = excluded.samples,
+  raw = excluded.raw;
+`)
+  }
+  return sql.join("\n")
+}
+
+function createSqlHash(value) {
+  let hash = 0
+  const text = String(value ?? "")
+  for (let index = 0; index < text.length; index += 1) hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0
+  return Math.abs(hash).toString(16)
+}
+
+function hotlistHealthSql(record) {
+  return `
+insert into trading.hotlist_health_runs
+  (id, generated_at, status, ok, summary, issues, warnings, raw)
+values
+  (${lit(record.id)}, ${tsLit(record.generatedAt)}, ${lit(record.status ?? "active")}, ${record.ok ? "true" : "false"}, ${lit(record.summary)}, ${arrayLit(record.issues)}, ${arrayLit(record.warnings)}, ${jsonLit(record)})
+on conflict (id) do update set
+  ok = excluded.ok,
+  summary = excluded.summary,
+  issues = excluded.issues,
+  warnings = excluded.warnings,
+  raw = excluded.raw;
+`
+}
+
 function importRecord(record) {
   const sql = [batchSql(record, { scope: record.schema ?? "facts" })]
   if (record.schema === "73wiki-preopen-intel-v1") {
@@ -529,6 +740,24 @@ function importRecord(record) {
   }
   if (record.schema === "73wiki-limit-up-reasons-v1") {
     sql.push(limitUpReasonsSql(record))
+  }
+  if (record.schema === "73wiki-market-strength-rank-v1") {
+    sql.push(marketStrengthRankSql(record))
+  }
+  if (record.schema === "73wiki-market-focus-universe-v1") {
+    sql.push(marketFocusUniverseSql(record))
+  }
+  if (record.schema === "73wiki-focus-trend-validation-v1") {
+    sql.push(focusTrendValidationSql(record))
+  }
+  if (record.schema === "73wiki-prediction-outcome-review-v1") {
+    sql.push(predictionOutcomeReviewSql(record))
+  }
+  if (record.schema === "73wiki-score-feedback-v1") {
+    sql.push(scoreFeedbackSql(record))
+  }
+  if (record.schema === "73wiki-hotlist-health-v1") {
+    sql.push(hotlistHealthSql(record))
   }
   if (record.schema === "73wiki-ifind-market-snapshot-v1") {
     for (const row of record.stockQuotes ?? []) sql.push(quoteSql(record, row, { source: "ifind-mcp", scope: "watchlist" }))
@@ -576,9 +805,14 @@ function runPsql(sql, { captureStdout = true, quiet = false } = {}) {
   return captureStdout ? result.stdout : ""
 }
 
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(ms))
+}
+
 function main() {
-  const projectPath = path.resolve(process.argv[2] ?? DEFAULT_PROJECT_PATH)
-  const records = FACT_FILES.flatMap((relative) => readJsonl(path.join(projectPath, relative)))
+  const args = parseCliArgs(process.argv.slice(2))
+  const projectPath = path.resolve(args._[0] ?? DEFAULT_PROJECT_PATH)
+  const records = FACT_FILES.flatMap((relative) => readJsonl(path.join(projectPath, relative), { all: args.all, recentRecords: args.recentRecords }))
   let importedFactRecords = 0
   let batch = []
   let batchChars = 0
@@ -587,7 +821,17 @@ function main() {
 
   function flushBatch() {
     if (batch.length === 0) return
-    runPsql(["begin;", ...batch, "commit;"].join("\n"), { captureStdout: false, quiet: true })
+    const sql = ["begin;", "select pg_advisory_xact_lock(hashtext('73wiki_import_facts'));", ...batch, "commit;"].join("\n")
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        runPsql(sql, { captureStdout: false, quiet: true })
+        break
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (!/deadlock detected|could not serialize access|lock timeout/i.test(message) || attempt === 3) throw error
+        sleepMs(1000 * attempt)
+      }
+    }
     batch = []
     batchChars = 0
   }
@@ -626,11 +870,24 @@ union all select 'strong', count(*) from trading.strong_pool
 union all select 'warroom', count(*) from trading.warroom_quotes
 union all select 'watchlists', count(*) from trading.warroom_watchlists
 union all select 'watchlist_items', count(*) from trading.warroom_watchlist_items
+union all select 'market_strength_ranks', count(*) from trading.market_strength_ranks
+union all select 'market_strength_rank_items', count(*) from trading.market_strength_rank_items
+union all select 'market_focus_universes', count(*) from trading.market_focus_universes
+union all select 'market_focus_items', count(*) from trading.market_focus_universe_items
+union all select 'focus_trend_validations', count(*) from trading.focus_trend_validations
+union all select 'focus_trend_items', count(*) from trading.focus_trend_validation_items
+union all select 'prediction_outcome_reviews', count(*) from trading.prediction_outcome_reviews
+union all select 'prediction_outcome_items', count(*) from trading.prediction_outcome_review_items
+union all select 'score_feedback_runs', count(*) from trading.score_feedback_runs
+union all select 'score_feedback_rules', count(*) from trading.score_feedback_rules
+union all select 'hotlist_health_runs', count(*) from trading.hotlist_health_runs
 order by table_name;
 `)
   console.log(JSON.stringify({
     ok: true,
     projectPath,
+    mode: args.all ? "all" : "recent",
+    recentRecords: args.all ? null : args.recentRecords,
     importedFactRecords,
     counts: counts.trim().split(/\r?\n/).slice(2, -1).map((line) => line.trim()).filter(Boolean),
   }, null, 2))

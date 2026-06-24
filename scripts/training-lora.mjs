@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
+import { sampleQuality } from "./signal-quality.mjs"
 
 const DEFAULT_PROJECT_PATH = process.env.WIKI_PROJECT_PATH ?? "C:/wiki/73神话"
 const HYPOTHESES_PATH = "data/brain/hypotheses.jsonl"
@@ -273,6 +274,7 @@ function buildReport(projectPath, samples, candidates, diagnostics, sourceMode) 
       sourceMode,
       hypothesisParseErrors: diagnostics.hypothesisParseErrors.length,
       validationParseErrors: diagnostics.validationParseErrors.length,
+      rejectedSamples: diagnostics.rejectedSamples?.length ?? 0,
     },
     writePolicy: {
       rawWrite: false,
@@ -306,10 +308,13 @@ function main() {
       .filter((row) => row?.id && validationsByTarget.has(row.id))
       .map((row) => buildSample(row, validationsByTarget.get(row.id))))
     .sort((a, b) => String(a.input.tradeDate ?? "").localeCompare(String(b.input.tradeDate ?? "")) || a.id.localeCompare(b.id))
-  const samples = candidates.filter((sample) => sample.label.result !== "pending")
+  const quality = candidates.map((sample) => ({ sample, quality: sampleQuality(sample) }))
+  const samples = quality.filter((item) => item.quality.ok).map((item) => item.sample)
+  const rejected = quality.filter((item) => !item.quality.ok)
   const report = buildReport(projectPath, samples, candidates, {
     hypothesisParseErrors: hypotheses.parseErrors,
     validationParseErrors: validations.parseErrors,
+    rejectedSamples: rejected.map((item) => ({ id: item.sample.id, quality: item.quality })).slice(0, 200),
   }, sourceMode)
   if (args.write) {
     writeJsonl(path.join(projectPath, OUTPUT_PATH), samples)

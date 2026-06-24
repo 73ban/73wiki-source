@@ -13,13 +13,17 @@ const STEPS = [
   { name: "market-regime", script: "market-regime.mjs" },
   { name: "market-strength-rank", script: "market-strength-rank.mjs" },
   { name: "market-focus-universe", script: "market-focus-universe.mjs" },
+  { name: "focus-trend-validation", script: "focus-trend-validation.mjs" },
+  { name: "hotlist-health", script: "hotlist-health.mjs" },
   { name: "evidence-queue", script: "evidence-queue.mjs" },
   { name: "review-manifest", script: "review-manifest.mjs" },
   { name: "next-limitup-review", script: "next-limitup-review.mjs" },
   { name: "prediction-outcome-review", script: "prediction-outcome-review.mjs" },
+  { name: "score-feedback", script: "score-feedback.mjs" },
   { name: "trading-trajectories", script: "trading-trajectories.mjs" },
   { name: "training-lora", script: "training-lora.mjs" },
   { name: "concept-pools", script: "concept-pools.mjs" },
+  { name: "market-signal-dashboard", script: "market-signal-dashboard.mjs" },
   { name: "system-health", script: "system-health.mjs" },
 ]
 

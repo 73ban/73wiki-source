@@ -600,6 +600,163 @@ create table if not exists trading.review_judgements (
   raw jsonb not null default '{}'::jsonb
 );
 
+create table if not exists trading.market_strength_ranks (
+  id text primary key,
+  generated_at timestamptz not null,
+  evidence_trade_date date,
+  status text not null default 'active',
+  counts jsonb not null default '{}'::jsonb,
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists trading.market_strength_rank_items (
+  id text primary key,
+  rank_id text references trading.market_strength_ranks(id) on delete cascade,
+  evidence_trade_date date,
+  code text not null,
+  name text,
+  full_market_daily_rank integer,
+  amount_rank integer,
+  change_percent numeric,
+  amount numeric,
+  turnover_rate numeric,
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  unique (rank_id, code)
+);
+
+create table if not exists trading.market_focus_universes (
+  id text primary key,
+  generated_at timestamptz not null,
+  evidence_trade_date date,
+  status text not null default 'active',
+  market_regime jsonb not null default '{}'::jsonb,
+  counts jsonb not null default '{}'::jsonb,
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists trading.market_focus_universe_items (
+  id text primary key,
+  universe_id text references trading.market_focus_universes(id) on delete cascade,
+  evidence_trade_date date,
+  focus_rank integer,
+  code text not null,
+  name text,
+  role text,
+  score numeric,
+  sources text[] not null default '{}',
+  themes text[] not null default '{}',
+  reasons text[] not null default '{}',
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  unique (universe_id, code)
+);
+
+create table if not exists trading.focus_trend_validations (
+  id text primary key,
+  generated_at timestamptz not null,
+  evidence_trade_date date,
+  as_of_date date,
+  source_focus_universe_id text,
+  status text not null default 'active',
+  counts jsonb not null default '{}'::jsonb,
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists trading.focus_trend_validation_items (
+  id text primary key,
+  validation_id text references trading.focus_trend_validations(id) on delete cascade,
+  evidence_trade_date date,
+  as_of_date date,
+  code text not null,
+  name text,
+  focus_rank integer,
+  focus_role text,
+  interval_strength_rank integer,
+  interval_close_rank integer,
+  best_max_gain_pct numeric,
+  best_close_gain_pct numeric,
+  label text,
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  unique (validation_id, code)
+);
+
+create table if not exists trading.prediction_outcome_reviews (
+  id text primary key,
+  generated_at timestamptz not null,
+  prediction_trade_date date,
+  as_of_date date,
+  prediction_record_id text,
+  status text not null default 'active',
+  counts jsonb not null default '{}'::jsonb,
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists trading.prediction_outcome_review_items (
+  id text primary key,
+  review_id text references trading.prediction_outcome_reviews(id) on delete cascade,
+  prediction_trade_date date,
+  as_of_date date,
+  code text not null,
+  name text,
+  predicted_rank integer,
+  rank_by_outcome integer,
+  rank_by_playbook integer,
+  outcome_label text,
+  playbook text,
+  method_fit text,
+  correct boolean,
+  best_max_gain_pct numeric,
+  best_close_gain_pct numeric,
+  outcome_score numeric,
+  focus_rank integer,
+  focus_role text,
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  unique (review_id, code)
+);
+
+create table if not exists trading.score_feedback_runs (
+  id text primary key,
+  generated_at timestamptz not null,
+  status text not null default 'active',
+  counts jsonb not null default '{}'::jsonb,
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists trading.score_feedback_rules (
+  id text primary key,
+  run_id text references trading.score_feedback_runs(id) on delete cascade,
+  rule_type text not null,
+  rule_key text not null,
+  action text,
+  score_delta numeric,
+  hit_rate numeric,
+  avg_best_max_gain_pct numeric,
+  samples integer,
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  unique (run_id, rule_type, rule_key)
+);
+
+create table if not exists trading.hotlist_health_runs (
+  id text primary key,
+  generated_at timestamptz not null,
+  status text not null default 'active',
+  ok boolean not null default false,
+  summary text,
+  issues text[] not null default '{}',
+  warnings text[] not null default '{}',
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists trading.collection_runs (
   id text primary key,
   planned_at timestamptz,

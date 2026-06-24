@@ -4,6 +4,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { classifySignalGrade, detectAiSubthemes } from "./trading-policy.mjs"
 import { mergeHotFiles, readHotFiles } from "./raw-hot-files.mjs"
+import { sanitizeList } from "./signal-quality.mjs"
 
 const DEFAULT_PROJECT_PATH = process.env.WIKI_PROJECT_PATH ?? "C:/wiki/73神话"
 const FACT_PATH = "data/facts/prediction_candidates.jsonl"
@@ -186,6 +187,40 @@ function readJsonMaybe(filePath) {
   } catch {
     return null
   }
+}
+
+function loadScoreFeedback(projectPath) {
+  const record = readJsonMaybe(path.join(projectPath, ".llm-wiki/score-feedback/latest-score-feedback.json"))
+  const rules = (record?.rules ?? []).filter((rule) => Number.isFinite(Number(rule.scoreDelta)))
+  const bySourceTag = new Map()
+  const byTheme = new Map()
+  for (const rule of rules) {
+    if (rule.type === "sourceTag") bySourceTag.set(String(rule.key), Number(rule.scoreDelta))
+    if (rule.type === "theme") byTheme.set(String(rule.key), Number(rule.scoreDelta))
+  }
+  return { id: record?.id ?? null, bySourceTag, byTheme }
+}
+
+function scoreFeedbackAdjustment(item, feedback) {
+  if (!feedback?.id) return { delta: 0, reasons: [] }
+  let delta = 0
+  const reasons = []
+  for (const tag of item.sourceTags ?? []) {
+    const value = feedback.bySourceTag.get(String(tag))
+    if (Number.isFinite(value) && value !== 0) {
+      delta += value
+      reasons.push(`score-feedback source ${tag} ${value > 0 ? "+" : ""}${value}`)
+    }
+  }
+  for (const theme of item.themes ?? []) {
+    const value = feedback.byTheme.get(String(theme))
+    if (Number.isFinite(value) && value !== 0) {
+      delta += value
+      reasons.push(`score-feedback theme ${theme} ${value > 0 ? "+" : ""}${value}`)
+    }
+  }
+  const capped = Math.max(-30, Math.min(30, delta))
+  return { delta: capped, reasons: reasons.slice(0, 4) }
 }
 
 function walkTextFiles(rootDir, limit = 12000) {
@@ -749,6 +784,7 @@ function scorePatch({ src, direct, positives, risks, themes, context, known, rel
 function scanPredictionSignals(projectPath, options = {}) {
   const knownStocks = collectKnownStocks(projectPath)
   const marketRegime = loadMarketRegime(projectPath)
+  const scoreFeedback = loadScoreFeedback(projectPath)
   const candidates = new Map()
   const tradeDate = options.tradeDate ?? nextTradingDate()
   const files = recentRawFiles(projectPath, {
@@ -893,13 +929,22 @@ function scanPredictionSignals(projectPath, options = {}) {
         themes: unique(item.themes).slice(0, 12),
         positives: unique(item.positives).slice(0, 12),
         risks: unique(item.risks).slice(0, 10),
-        reasons: unique(item.reasons).slice(0, 6),
+        reasons: sanitizeList(item.reasons, 6),
         invalidations: unique(item.invalidations).slice(0, 6),
         evidence: item.evidence.slice(0, 6),
         lowValueOnly: Number(item.lowValueMentions ?? 0) >= Number(item.mentions ?? 0),
         downgradeTags: unique(item.downgradeTags).slice(0, 6),
         marketRegime: summarizeCandidateRegimeAdjustments(item.marketRegimeAdjustments),
       }))
+      .map((item) => {
+        const feedback = scoreFeedbackAdjustment(item, scoreFeedback)
+        return {
+          ...item,
+          score: Math.max(0, Math.round((Number(item.score ?? 0) + feedback.delta) * 10) / 10),
+          scoreFeedback: scoreFeedback.id ? { sourceId: scoreFeedback.id, delta: feedback.delta, reasons: feedback.reasons } : null,
+          reasons: sanitizeList([...(item.reasons ?? []), ...feedback.reasons], 6),
+        }
+      })
       .filter((item) => item.name || item.sourceTags.includes("position") || item.sourceTags.includes("daily-review") || item.sourceTags.includes("post-sell-rewatch")),
   }
 }

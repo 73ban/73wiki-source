@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
+import { sanitizeList } from "./signal-quality.mjs"
 
 const DEFAULT_PROJECT_PATH = process.env.WIKI_PROJECT_PATH ?? "C:/wiki/73wiki"
 const REPORT_ROOT = ".llm-wiki/market-focus-universe"
@@ -135,7 +136,7 @@ function addEntry(map, input) {
   current.score += Number(input.score ?? 0)
   current.sources = unique([...current.sources, input.source])
   if (input.source && input.rank != null) current.sourceRanks[input.source] = input.rank
-  current.reasons = unique([...current.reasons, ...(input.reasons ?? [])]).slice(0, 12)
+  current.reasons = sanitizeList(unique([...current.reasons, ...(input.reasons ?? [])]), 12)
   current.themes = unique([...current.themes, ...(input.themes ?? [])]).slice(0, 12)
   current.metrics = { ...current.metrics, ...(input.metrics ?? {}) }
   map.set(code, current)

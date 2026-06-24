@@ -571,6 +571,14 @@ async function runCollector({ projectPath, label, profile, maxSymbols, force }) 
       "500",
       "--write",
     ], { allowFailure: true }))
+    steps.push(runStep("market:focus:trend", process.execPath, [
+      scriptPath("focus-trend-validation.mjs"),
+      "--project",
+      projectPath,
+      "--limit",
+      "500",
+      "--write",
+    ], { allowFailure: true }))
     steps.push(runStep("prediction:outcome", process.execPath, [
       scriptPath("prediction-outcome-review.mjs"),
       "--project",
@@ -579,6 +587,12 @@ async function runCollector({ projectPath, label, profile, maxSymbols, force }) 
       "5",
       "--candidate-limit",
       "30",
+      "--write",
+    ], { allowFailure: true }))
+    steps.push(runStep("score:feedback", process.execPath, [
+      scriptPath("score-feedback.mjs"),
+      "--project",
+      projectPath,
       "--write",
     ], { allowFailure: true }))
     steps.push(runStep("market:regime", process.execPath, [
@@ -594,6 +608,12 @@ async function runCollector({ projectPath, label, profile, maxSymbols, force }) 
     projectPath,
     "--max-items",
     "100",
+    "--write",
+  ], { allowFailure: true }))
+  steps.push(runStep("hotlist:health", process.execPath, [
+    scriptPath("hotlist-health.mjs"),
+    "--project",
+    projectPath,
     "--write",
   ], { allowFailure: true }))
   steps.push(runStep("prediction:candidates", process.execPath, [
@@ -775,6 +795,13 @@ async function runCollector({ projectPath, label, profile, maxSymbols, force }) 
     "db:import-facts",
     "--",
     projectPath,
+  ], { allowFailure: true }))
+
+  steps.push(runStep("market:dashboard", process.execPath, [
+    scriptPath("market-signal-dashboard.mjs"),
+    "--project",
+    projectPath,
+    "--write",
   ], { allowFailure: true }))
 
   const hardFailures = steps.filter((step) => !step.ok && ["db:start", "market:watchlist"].includes(step.name))

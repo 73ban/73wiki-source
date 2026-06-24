@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import https from "node:https"
 import fs from "node:fs"
 import path from "node:path"
+import { sanitizeList } from "./signal-quality.mjs"
 
 const DEFAULT_PROJECT_PATH = process.env.WIKI_PROJECT_PATH ?? "C:/wiki/73wiki"
 const REPORT_ROOT = ".llm-wiki/prediction-outcome-review"
@@ -440,7 +441,7 @@ function buildSample(record, item) {
       rank: item.rank,
       score: item.score,
       themes: item.themes,
-      reasons: item.reasons,
+      reasons: sanitizeList(item.reasons, 8),
       marketRegime: item.marketRegime,
       playbook: item.playbook,
       ranks: {
@@ -523,7 +524,7 @@ async function reviewPredictionRecord(projectPath, predictionRecord, options = {
       score: candidate.score ?? null,
       signalGrade: candidate.signalGrade ?? null,
       themes: candidate.themes ?? [],
-      reasons: candidate.reasons ?? [],
+      reasons: sanitizeList(candidate.reasons ?? [], 8),
       sourceTags: candidate.sourceTags ?? [],
       marketRegime,
       metrics,
