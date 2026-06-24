@@ -209,6 +209,7 @@ function buildAudit(projectPath) {
     rawQueueConsumer: statInfo(path.join(llmRoot, "raw-queue-consumer", "latest-raw-queue-consumer.json")),
     marketRegime: statInfo(path.join(llmRoot, "market-regime", "latest-market-regime.json")),
     marketStrengthRank: statInfo(path.join(llmRoot, "market-strength-rank", "latest-market-strength-rank.json")),
+    marketFocusUniverse: statInfo(path.join(llmRoot, "market-focus-universe", "latest-market-focus-universe.json")),
     predictionOutcomeReview: statInfo(path.join(llmRoot, "prediction-outcome-review", "latest-prediction-outcome-review.json")),
     marketCollect: statInfo(path.join(llmRoot, "market-collect", "latest-market-collect.json")),
     thsHotlist: statInfo(path.join(llmRoot, "ths-hotlist", "latest-ths-hotlist.json")),
@@ -265,6 +266,7 @@ function buildAudit(projectPath) {
   if (!artifacts.trainingFlywheel.exists) warnings.push("training flywheel report is missing")
   if (!artifacts.marketRegime.exists) warnings.push("market regime report is missing")
   if (!artifacts.marketStrengthRank.exists) warnings.push("market strength rank report is missing")
+  if (!artifacts.marketFocusUniverse.exists) warnings.push("market focus universe report is missing")
   if (!artifacts.predictionOutcomeReview.exists) warnings.push("prediction outcome review is missing")
 
   return {
