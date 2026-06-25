@@ -1,0 +1,38 @@
+{
+  "schema": "ymj8903668-droid-backup-manifest-v1",
+  "owner": "ymj8903668-droid",
+  "generatedAt": "2026-06-25",
+  "repositories": [
+    {
+      "name": "trading-review-wiki",
+      "url": "https://github.com/ymj8903668-droid/trading-review-wiki.git",
+      "purpose": "primary trading wiki / CLI knowledge base"
+    },
+    {
+      "name": "QUEST",
+      "url": "https://github.com/ymj8903668-droid/QUEST.git",
+      "purpose": "deep research agent / evidence synthesis"
+    },
+    {
+      "name": "WeKnora",
+      "url": "https://github.com/ymj8903668-droid/WeKnora.git",
+      "purpose": "knowledge platform / wiki and retrieval layer"
+    },
+    {
+      "name": "wechat-radar",
+      "url": "https://github.com/ymj8903668-droid/wechat-radar.git",
+      "purpose": "WeChat intelligence dashboard"
+    },
+    {
+      "name": "wx-cli",
+      "url": "https://github.com/ymj8903668-droid/wx-cli.git",
+      "purpose": "local WeChat data CLI"
+    },
+    {
+      "name": "wiki",
+      "url": "https://github.com/ymj8903668-droid/wiki.git",
+      "purpose": "early wiki reference / historical layout"
+    }
+  ]
+}
+
